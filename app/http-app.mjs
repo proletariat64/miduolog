@@ -96,7 +96,7 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
         res.writeHead(200, {'Content-Type': original.contentType, 'X-Content-Type-Options': 'nosniff'});
         res.end(original.bytes); return;
       }
-      const assets = {'/': 'index.html', '/index.html': 'index.html', '/client.js': 'client.js', '/review-client.js': 'review-client.js', '/styles.css': 'styles.css'};
+      const assets = {'/': 'index.html', '/index.html': 'index.html', '/client.js': 'client.js', '/intake-command-client.js': 'intake-command-client.js', '/review-client.js': 'review-client.js', '/styles.css': 'styles.css'};
       if (req.method === 'GET' && assets[path]) {
         const file = assets[path], bytes = await readFile(resolve(appDir, file));
         const contentType = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}[file.slice(file.lastIndexOf('.'))] || 'text/html; charset=utf-8';

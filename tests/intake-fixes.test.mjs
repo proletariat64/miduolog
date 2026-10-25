@@ -350,3 +350,39 @@ test('multipart retains the full fifteen MiB per-photo allowance', async t => {
   const response = await app.request('/api/intake/batches', 'POST', form); assert.equal(response.status, 202);
   assert.equal((await app.settle(response.data.id)).state, 'completed'); assert.equal(app.calls(), 1);
 });
+
+
+test('uncertain client commands retain original visible content and target across navigation before reconciling once', async t => {
+  const {PendingCommands} = await import('../app/intake-command-client.js');
+  const app = await setup(t), pending = new PendingCommands();
+  const create = async question => (await app.request('/api/intake/questions', 'POST', {requestId: crypto.randomUUID(), content: {question}})).data;
+  const a = await create('题目A'), b = await create('题目B');
+  const original = pending.start({kind: 'new-attempt', targetId: a.id, path: '/api/intake/questions/' + a.id + '/attempts', payload: {studentAnswer: '原提交A'}, snapshot: {questionId: a.id, values: [{name: 'studentAnswer', value: '原提交A'}]}});
+  await assert.rejects(pending.reconcile(original.key, async (path, payload) => { await app.request(path, 'POST', payload); throw new Error('response lost after commit'); }), /response lost/);
+  const other = pending.start({kind: 'new-attempt', targetId: b.id, path: '/api/intake/questions/' + b.id + '/attempts', payload: {studentAnswer: 'B的新操作'}, snapshot: {questionId: b.id, values: [{name: 'studentAnswer', value: 'B的新操作'}]}});
+  const restored = pending.start({kind: 'new-attempt', targetId: a.id, path: '/wrong-target', payload: {studentAnswer: '返回后的空白或新输入'}, snapshot: {values: []}});
+  assert.equal(restored.key, original.key); assert.notEqual(restored.key, other.key);
+  assert.equal(restored.path, original.path); assert.deepEqual(restored.snapshot, original.snapshot); assert.equal(restored.payload.studentAnswer, '原提交A');
+  let sends = 0; const send = (path, payload) => { sends++; return app.request(path, 'POST', payload); };
+  const [first, joined] = await Promise.all([pending.reconcile(restored.key, send), pending.reconcile(restored.key, send)]);
+  assert.equal(first.status, 200); assert.equal(joined.status, 200); assert.equal(sends, 1);
+  assert.equal((await app.request('/api/intake/questions/' + a.id)).data.attempts.length, 1);
+  assert.equal((await app.request('/api/intake/questions/' + b.id)).data.attempts.length, 0);
+  assert.equal(pending.has(original.key), false); assert.equal(pending.has(other.key), true);
+});
+
+test('pending global add and archived-parent split can be recovered by saved path without creating duplicates', async t => {
+  const {PendingCommands} = await import('../app/intake-command-client.js');
+  const app = await setup(t, {}, createNotebook), pending = new PendingCommands();
+  const moduleResponse = await fetch(app.origin() + '/intake-command-client.js'); assert.equal(moduleResponse.status, 200); assert.match(moduleResponse.headers.get('content-type'), /javascript/); await moduleResponse.text();
+  const add = pending.start({kind: 'add', path: '/api/intake/questions', payload: {content: {question: '上次补录原题'}}, snapshot: {questionId: null, values: [{name: 'question', value: '上次补录原题'}]}});
+  const created = (await app.request(add.path, 'POST', add.payload)).data;
+  const reopened = pending.start({kind: 'add', path: '/api/intake/questions', payload: {content: {question: '不能悄悄替换上次补录'}}, snapshot: {values: []}});
+  assert.equal((await app.request(reopened.path, 'POST', reopened.payload)).data.id, created.id);
+  pending.acknowledge(add.key);
+  const split = pending.start({kind: 'split', targetId: created.id, path: '/api/intake/questions/' + created.id + '/split', payload: {parts: [{content: {question: '第一问'}}, {content: {question: '第二问'}}]}, snapshot: {questionId: created.id, values: [{name: 'parts', value: '第一问\n---\n第二问'}]}});
+  const children = (await app.request(split.path, 'POST', split.payload)).data;
+  assert.equal((await app.request('/api/intake/questions/' + created.id)).data.removed, true);
+  const recovered = await app.request(split.path, 'POST', pending.get(split.key).payload);
+  assert.deepEqual(recovered.data.map(q => q.id), children.map(q => q.id)); assert.equal((await app.request('/api/intake/questions')).data.length, 2);
+});
