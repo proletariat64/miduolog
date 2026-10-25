@@ -15,7 +15,7 @@ async function setup(t, responses = {}, factory = createIntakeServer) {
   const client = {recognize: async file => {
     calls++;
     const label = (await readFile(file)).subarray(8).toString();
-    const value = responses[label] || {questions: [q()], answers: [], unclear: []};
+    const value = responses[label] || responses['*'] || {questions: [q()], answers: [], unclear: []};
     if (value instanceof Error) throw value;
     return {data: value};
   }, runJson: async () => ({data: {verdict: 'correct', recognizedAnswer: '2', reason: '测试', referenceAnswer: '2', explanation: '测试', nextStep: '', uncertainties: []}}), close() {}};
@@ -246,4 +246,20 @@ test('automatic marking is conservative and separates teacher evidence from inde
   assert.deepEqual(states, {'1': 'incorrect', '2': 'pending', '3': 'pending', '4': 'pending', '5': 'pending'});
   const attempt = batch.questions.find(q => q.content.number === '2').attempts[0];
   assert.equal(attempt.teacherReview.mark, 'correct'); assert.equal(attempt.aiAssessment.verdict, 'incorrect'); assert.equal(attempt.causeStatus, 'pending');
+});
+
+test('confirming a re-encoded answer sheet as a duplicate adds provenance without another attempt', async t => {
+  const sharp = (await import('sharp')).default, pixels = Buffer.alloc(320 * 440 * 3, 250);
+  for (let y = 35; y < 400; y++) for (let x = 25; x < 290; x++) {
+    const row = Math.floor((y - 35) / 29);
+    if ((y - 35) % 29 < 3 && x < 100 + (row * 43) % 185) pixels.fill(30, (y * 320 + x) * 3, (y * 320 + x) * 3 + 3);
+  }
+  const original = await sharp(pixels, {raw: {width: 320, height: 440, channels: 3}}).png().toBuffer(), resized = await sharp(original).resize(480).webp({quality: 65}).toBuffer();
+  const app = await setup(t, {'*': {questions: [], answers: [{number: '1', studentAnswer: '2', matchKey: '数学甲', answerStatus: 'answered'}]}, paper: {questions: [q('计算1+1', {matchKey: '数学甲'})]}});
+  const send = async bytes => (await app.request('/api/intake/batches', 'POST', {requestId: crypto.randomUUID(), files: [{name: 'sheet.png', base64: bytes.toString('base64')}, {name: 'paper.png', base64: png('paper').toString('base64')}]})).data;
+  const first = await app.settle((await send(original)).id), second = await app.settle((await send(resized)).id);
+  const d = second.decisions.find(d => d.type === 'photo_similarity');
+  await app.request('/api/intake/decisions/' + d.id, 'POST', {action: 'skip', photoId: first.photos[0].id});
+  const question = (await app.request('/api/intake/questions/' + first.questions[0].id)).data;
+  assert.equal(question.attempts.length, 1); assert.equal(question.attempts[0].sources.length, 2);
 });

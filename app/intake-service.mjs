@@ -198,7 +198,8 @@ export class IntakeService {
     }
   }
   attachFragment(row, questionId) {
-    const raw = parse(row.data), previous = this.db.prepare("SELECT attemptId FROM intake_fragments WHERE photoId=? AND indexNo=? AND questionId=? AND state='linked' LIMIT 1").get(row.photoId, row.indexNo, questionId);
+    const canonicalPhotoId = this.db.prepare('SELECT reusedFrom FROM intake_photos WHERE id=?').get(row.photoId)?.reusedFrom || row.photoId;
+    const raw = parse(row.data), previous = this.db.prepare("SELECT attemptId FROM intake_fragments WHERE photoId=? AND indexNo=? AND questionId=? AND state='linked' LIMIT 1").get(canonicalPhotoId, row.indexNo, questionId);
     const question = this.store.question(questionId); if (!question) throw error('关联题目不可用');
     const sources = [this.store.source(row.photoId, raw)];
     const attemptId = previous?.attemptId || this.store.addAttempt(questionId, {...question.content, ...raw}, sources);
