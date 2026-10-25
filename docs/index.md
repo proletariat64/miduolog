@@ -2,7 +2,8 @@
 
 - [项目入口与当前功能](../README.md)
 - [业务术语](glossary.md)：题目、错因、复习及批阅的共同含义。
-- [架构](architecture.md)：模块契约、持久化和恢复行为。
+- [架构](architecture.md)：独立录入接口、题目与原作答、持久化和恢复行为。
+- [题目中心的录入边界](adr/question-centered-intake.md)：照片、批次、题目与作答的职责取舍。
 - [开发与 PR](development.md)：本地检查、源码审查和提交步骤。
 - [Worktree 初始化](worktrees.md)：完整开发环境、独立端口和本地数据隔离。
 - [目录组织与文档维护](repository-structure.md)：文件归属、命名与同步更新规则。

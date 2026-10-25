@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
 import {readFile} from 'node:fs/promises';
 import {join} from 'node:path';
-import {testDirectory, png} from './helpers.mjs';
+import {testDirectory, png, deferred} from './helpers.mjs';
 import {createIntakeServer} from '../app/intake-http.mjs';
 import {createNotebook} from '../app/http-app.mjs';
 import {questionPage, answerPage} from './intake-extraction-fixtures.mjs';
@@ -18,7 +18,7 @@ async function setup(t, responses = {}, factory = createIntakeServer) {
     const label = (await readFile(file)).subarray(8).toString();
     const value = responses[label] || responses['*'] || {questions: [q()], answers: [], unclear: []};
     if (value instanceof Error) throw value;
-    return {data: value};
+    return {data: typeof value === 'function' ? await value() : value};
   }, runJson: async () => ({data: {verdict: 'correct', recognizedAnswer: '2', reason: '测试', referenceAnswer: '2', explanation: '测试', nextStep: '', uncertainties: []}}), close() {}};
   async function open() {
     db = new DatabaseSync(path); app = await factory({db, client, dataDir});
@@ -39,7 +39,7 @@ async function setup(t, responses = {}, factory = createIntakeServer) {
     }
     throw new Error('batch did not settle');
   };
-  return {request, upload, settle, responses, calls: () => calls, reopen: async () => { await app.close(); db.close(); await open(); }};
+  return {request, upload, settle, responses, databasePath: path, calls: () => calls, reopen: async () => { await app.close(); db.close(); await open(); }};
 }
 
 test('standalone intake saves every visible question and original evidence without requiring review', async t => {
@@ -299,4 +299,67 @@ test('different visible document IDs cannot be overridden by equal titles, quest
   const batch = await app.settle((await app.upload(['questions','answers'])).id);
   assert.equal(batch.state, 'attention'); assert.equal(batch.questions.every(q => q.attempts.length === 0), true);
   assert.equal(batch.fragments.every(f => f.state === 'unlinked'), true);
+});
+
+
+test('split keeps all child questions discoverable through the original upload batch after restart', async t => {
+  const app = await setup(t, {whole: {questions: [q('第一问和第二问')]}});
+  const batch = await app.settle((await app.upload(['whole'])).id), original = batch.questions[0];
+  const parts = (await app.request('/api/intake/questions/' + original.id + '/split', 'POST', {
+    requestId: crypto.randomUUID(), parts: [{content: {number: '1', question: '第一问'}}, {content: {number: '2', question: '第二问'}}],
+  })).data;
+  const expected = parts.map(part => part.id).sort();
+  assert.deepEqual((await app.request('/api/intake/batches/' + batch.id)).data.questions.map(part => part.id).sort(), expected);
+  await app.reopen();
+  assert.deepEqual((await app.request('/api/intake/questions?batchId=' + batch.id)).data.map(part => part.id).sort(), expected);
+  assert.equal((await app.request('/api/intake/questions/' + original.id)).data.removed, true);
+});
+
+
+test('new intake retains completed inference across a SQLite write lock without replaying it', async t => {
+  const started = deferred(), inference = deferred();
+  t.after(() => inference.resolve({questions: [q('模型已完成，等待保存')], answers: [], unclear: []}));
+  const app = await setup(t, {locked: async () => { started.resolve(); return inference.promise; }});
+  const batch = await app.upload(['locked']); await started.promise;
+  const lock = new DatabaseSync(app.databasePath);
+  try {
+    lock.exec('BEGIN IMMEDIATE');
+    inference.resolve({questions: [q('模型已完成，等待保存')], answers: [], unclear: []});
+    await new Promise(resolve => setTimeout(resolve, 70));
+    assert.equal((await app.request('/api/intake/batches/' + batch.id)).data.state, 'processing');
+    assert.equal(app.calls(), 1);
+  } finally { if (lock.isTransaction) lock.exec('ROLLBACK'); lock.close(); }
+  assert.equal((await app.settle(batch.id)).questions[0].content.question, '模型已完成，等待保存');
+  await app.reopen();
+  assert.equal((await app.request('/api/intake/batches/' + batch.id)).data.state, 'completed');
+  assert.equal(app.calls(), 1);
+});
+
+
+test('answer sheets wait for all batch materials instead of warning while their question photo is still processing', async t => {
+  const started = deferred(), inference = deferred();
+  t.after(() => inference.resolve(questionPage));
+  const app = await setup(t, {answers: answerPage, questions: async () => { started.resolve(); return inference.promise; }});
+  const task = await app.upload(['answers', 'questions']); await started.promise;
+  const processing = (await app.request('/api/intake/batches/' + task.id)).data;
+  assert.equal(processing.state, 'processing'); assert.equal(processing.warnings.length, 0);
+  inference.resolve(questionPage);
+  const completed = await app.settle(task.id);
+  assert.equal(completed.state, 'completed'); assert.equal(completed.warnings.length, 0);
+  assert.equal(completed.questions.every(question => question.attempts.length === 1), true);
+});
+
+
+test('status and tag filters follow the latest attempt while edits to an older attempt keep prior error evidence', async t => {
+  const app = await setup(t, {tagged: {questions: [q('计算 2+2', {studentAnswer: '5', answerStatus: 'answered', teacherReview: {mark: 'incorrect', evidence: '红叉'}})]}});
+  const question = (await app.settle((await app.upload(['tagged'])).id)).questions[0];
+  await app.request('/api/intake/questions/' + question.id, 'PATCH', {content: {tags: ['复习数学']}});
+  await app.request('/api/intake/questions/' + question.id + '/attempts', 'POST', {requestId: crypto.randomUUID(), studentAnswer: '4', status: 'correct'});
+  await app.request('/api/intake/attempts/' + question.attempts[0].id, 'PATCH', {status: 'partial', statusReason: '对照原图修正旧次作答'});
+  await app.reopen();
+  const filtered = (await app.request('/api/intake/questions?status=correct&tag=' + encodeURIComponent('复习数学'))).data;
+  assert.deepEqual(filtered.map(item => item.id), [question.id]);
+  assert.equal(filtered[0].everWrong, true); assert.equal(filtered[0].attempts.length, 2);
+  assert.equal(filtered[0].attempts[0].status, 'partial'); assert.equal(filtered[0].attempts[1].status, 'correct');
+  assert.deepEqual((await app.request('/api/intake/questions?status=partial')).data, []);
 });
