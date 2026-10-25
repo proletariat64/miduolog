@@ -1,7 +1,7 @@
 import {readFile,readdir,writeFile,mkdir} from 'node:fs/promises';
 import {resolve,extname} from 'node:path';
 import assert from 'node:assert/strict';
-import {waitForImport} from './poll-import.mjs';
+import {waitForImport} from '../lib/poll-import.mjs';
 
 const folder=resolve(process.argv[2]||'');
 if(!process.argv[2])throw new Error('请提供试卷目录');

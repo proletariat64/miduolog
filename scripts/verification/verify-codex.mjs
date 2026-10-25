@@ -1,4 +1,4 @@
-import {CodexClient,recognitionSchema} from '../app/codex-client.mjs';
+import {CodexClient,recognitionSchema} from '../../app/codex-client.mjs';
 import {resolve} from 'node:path';
 import {mkdir,writeFile} from 'node:fs/promises';
 const client=new CodexClient();

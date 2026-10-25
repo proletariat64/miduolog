@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {testDirectory, png} from './helpers.mjs';
 
 const run = promisify(execFile);
-const script = fileURLToPath(new URL('../scripts/verify-architecture-data.mjs', import.meta.url));
+const script = fileURLToPath(new URL('../scripts/verification/verify-architecture-data.mjs', import.meta.url));
 
 test('snapshot and verification preserve file-backed WAL rows and image digests', async t => {
   let db;

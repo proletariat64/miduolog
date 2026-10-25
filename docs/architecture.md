@@ -32,4 +32,4 @@
 
 `npm test` 覆盖模块行为和真实 HTTP 路径，使用临时目录、内存 SQLite 及假 Codex 进程，不读取真实试卷、不消耗模型额度。
 
-本机切换前可用 `node scripts/verify-architecture-data.mjs --snapshot` 创建一致的数据库快照，切换后运行 `node scripts/verify-architecture-data.mjs` 核对旧记录和原图。快照与核对报告均在 Git 忽略目录内。
+本机切换前可用 `node scripts/verification/verify-architecture-data.mjs --snapshot` 创建一致的数据库快照，切换后运行 `node scripts/verification/verify-architecture-data.mjs` 核对旧记录和原图。快照与核对报告均在 Git 忽略目录内。
