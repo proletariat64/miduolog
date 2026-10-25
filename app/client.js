@@ -1,73 +1,205 @@
 import {ReviewUI} from './review-client.js';
-const $=id=>document.getElementById(id);let questions=[],imports=[],view='import',selected=null,working=false;
-const escape=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-function math(s){let t=escape(s);t=t.replace(/\\frac\{(-?[a-zA-Z0-9]+(?:\.\d+)?)\}\{(-?[a-zA-Z0-9]+(?:\.\d+)?)\}/g,(_,n,d)=>fraction(n,d));t=t.replace(/(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)/g,(_,n,d)=>fraction(n,d));t=t.replace(/\\overline\{([a-zA-Z0-9]+)\}/g,(_,n)=>'<math xmlns="http://www.w3.org/1998/Math/MathML"><mover accent="true"><mrow>'+n.match(/\d+|[a-zA-Z]/g).map(atom).join('')+'</mrow><mo>¯</mo></mover></math>');t=t.replace(/\b(\d+|[a-zA-Z])\^(?:\{(-?\d+)\}|(-?\d+))/g,(_,base,a,b)=>'<math xmlns="http://www.w3.org/1998/Math/MathML"><msup>'+atom(base)+'<mn>'+(a||b)+'</mn></msup></math>');return t.replace(/\\times/g,'×').replace(/\\div/g,'÷').replace(/\\cdots/g,'⋯').replace(/\\ldots/g,'…').replace(/\\[()[\]]/g,'').replace(/\n/g,'<br>');}
-function atom(s){const tag=/^-?\d+(?:\.\d+)?$/.test(s)?'mn':'mi';return '<'+tag+'>'+s+'</'+tag+'>';}
-function fraction(n,d){return '<math xmlns="http://www.w3.org/1998/Math/MathML" displaystyle="true"><mfrac>'+atom(n)+atom(d)+'</mfrac></math>';}
-async function api(path,options={}){const r=await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Mido-Client':'desktop',...options.headers}});const data=await r.json();if(!r.ok)throw new Error(data.error||'请求失败');return data;}
-const reviewUI=new ReviewUI({api,math,escape,active:()=>view==='review'});
-function notice(text,error=false){$('chat').innerHTML='<div class="notice '+(error?'error':'')+'">'+escape(text)+'</div>'+$('chat').innerHTML;}
-async function reload(){[questions,imports]=await Promise.all([api('/api/questions'),api('/api/imports')]);$('pendingCount').textContent=questions.filter(q=>q.state==='pending').length;$('libraryCount').textContent=questions.filter(q=>q.state==='library').length;}
-function cards(list){return list.map(q=>{const c=q.content;const analysisLabel=!c.question?.trim()?'题干缺失，需补充':c.causeStatus==='confirmed'?'错因已确认':c.observedError?(c.possibleCause?'模型提示需关注':'判断有疑问，需核对'):'暂未发现明确错误';return '<div class="item '+(selected===q.id?'selected':'')+'"><span class="tag">'+escape(c.subject)+' · 第 '+escape(c.number||'?')+' 题</span><span class="tag state">'+(q.state==='pending'?'待核对':'已入库')+'</span><span class="tag">'+analysisLabel+'</span><p>'+math(c.question||'图片中未识别到完整题干，请对照原图补充。')+'</p><button data-question="'+q.id+'">'+(q.state==='pending'?'核对题目 →':'查看题目 →')+'</button></div>';}).join('');}
-function render(){document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));$('heading').textContent=({import:'录入错题',pending:'待核对',library:'错题库',review:'复习'})[view];$('composer').hidden=view==='review';feedback.hidden=view==='review'||!importTask;if(view==='review'){$('subheading').textContent='先独立作答，提交后由 Codex 批阅';$('panel').hidden=true;$('toggle').hidden=true;$('original').removeAttribute('src');for(const id of ['questionPreview','answerPreview','errorText','causeText'])$(id).textContent='';$('questionEdit').value='';$('answerEdit').value='';void reviewUI.home();return;}
-  const list=questions.filter(q=>view==='library'?q.state==='library':q.state==='pending');$('subheading').textContent=view==='library'?'核对完成的错题 · 已保存在本地':'识别后先核对，再进入复习库';let text=view==='import'?'<h2>从一张作业图片开始</h2><p>打开整页图片，Codex 会识别题目和原作答，并提出待确认的错因。</p>':'';if(!list.length)text+='<div class="empty">'+(view==='library'?'还没有已核对入库的错题。':'目前没有待核对题目，打开图片即可开始。')+'</div>';else text+=cards(list);const failed=imports.filter(i=>i.state==='failed');if(failed.length&&view==='import')text+='<div class="notice error">有 '+failed.length+' 张图片识别未完成，原图已保留：'+failed.map(i=>escape(i.originalName)+'（'+escape(i.error)+'）').join('；')+'</div>';$('chat').innerHTML=text;}
-function choose(id){const q=questions.find(q=>q.id===id);if(!q)return;selected=id;render();$('panel').hidden=false;$('toggle').hidden=false;$('toggle').textContent='收起题目详情 →';const c=q.content;$('original').src='/images/'+q.importId;$('originalLink').href='/images/'+q.importId;$('questionEdit').value=c.question;$('answerEdit').value=c.studentAnswer;$('subjectEdit').value=c.subject;$('knowledgeEdit').value=c.knowledgePoint;$('errorText').innerHTML=math(c.observedError||'暂未判断出明确错误。');$('causeText').innerHTML=math(c.possibleCause||'待确认。');$('unclear').textContent=(c.unclear||[]).join('；');$('confirm').hidden=q.state==='library';previews();$('chat').innerHTML+='<div class="message"><div class="who">米多的小助手</div><p>请先对照原图核对右侧题目和原作答。错因是模型的建议，你可以单独确认，也可以先保留待确认。</p><div class="actions"><button data-cause="confirmed">错因符合我的情况</button><button data-cause="disputed">不是这个原因</button><button data-cause="pending">我也不清楚</button></div></div>';}
-function previews(){$('questionPreview').innerHTML=math($('questionEdit').value||'题干缺失，请对照原图补充后再入库。');$('answerPreview').innerHTML=math($('answerEdit').value||'未识别到原作答');}
-async function save(state){if(!selected)return;await api('/api/questions/'+selected,{method:'PATCH',body:JSON.stringify({question:$('questionEdit').value,studentAnswer:$('answerEdit').value,subject:$('subjectEdit').value,knowledgePoint:$('knowledgeEdit').value,...(state?{state}:{})})});await reload();if(state==='library'){selected=null;$('panel').hidden=true;$('toggle').hidden=true;render();notice('题目已核对，进入复习库；错因待确认不影响入库。');}else{choose(selected);notice('修改已保存到本地。');}}
-$('questionEdit').oninput=previews;$('answerEdit').oninput=previews;$('save').onclick=()=>save().catch(e=>notice(e.message,true));$('confirm').onclick=()=>save('library').catch(e=>notice(e.message,true));
-document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{view=b.dataset.view;selected=null;$('panel').hidden=true;$('toggle').hidden=true;render();});document.addEventListener('click',async e=>{if(e.target.dataset.question)choose(e.target.dataset.question);if(e.target.dataset.cause&&selected){try{await api('/api/questions/'+selected,{method:'PATCH',body:JSON.stringify({causeStatus:e.target.dataset.cause})});await reload();choose(selected);notice(e.target.dataset.cause==='disputed'?'已保存你的异议，错因保留待确认。当前还未接入自动追问。':'已保存你的确认。');}catch(error){notice(error.message,true);}}});
-$('toggle').onclick=()=>{$('panel').hidden=!$('panel').hidden;$('toggle').textContent=$('panel').hidden?'展开题目详情 ←':'收起题目详情 →';};$('close').onclick=()=>{$('panel').hidden=true;$('toggle').textContent='展开题目详情 ←';};$('open').onclick=()=>$('file').click();
-// 进度独立于对话列表，切换页面、刷新和展开题目详情都不会把它覆盖掉。
-let importTask=null,previewUrl=null,watchVersion=0;
-const feedback=document.createElement('section');feedback.id='importFeedback';feedback.className='import-feedback';feedback.hidden=true;feedback.setAttribute('aria-label','图片导入进度');
-feedback.innerHTML='<div class="feedback-top"><img id="feedbackImage" alt="本次导入图片缩略图"><div class="feedback-copy"><div class="feedback-heading"><strong id="feedbackTitle" role="status" aria-live="polite"></strong><span id="feedbackElapsed"></span></div><div id="feedbackFile"></div><p id="feedbackMessage"></p></div></div><ol class="import-steps"><li>① 已选择图片</li><li>② 上传到本机</li><li>③ Codex 识别与分析</li><li>④ 结果待核对</li></ol><progress id="feedbackMeter" max="100" aria-label="图片上传进度" hidden></progress><div id="feedbackHint" class="muted"></div><div class="actions feedback-actions"><button id="feedbackResults" hidden>查看本次识别结果 →</button><button id="feedbackCheck" hidden>重新检查进度</button><button id="feedbackRefresh" hidden>刷新状态</button></div>';
-$('chat').before(feedback);
-function updateElapsed(){if(!importTask)return;const seconds=Math.max(0,Math.floor(((importTask.endedAt||Date.now())-importTask.startedAt)/1000));$('feedbackElapsed').textContent=(importTask.endedAt?'用时 ':'已等待 ')+(seconds<60?seconds+' 秒':Math.floor(seconds/60)+' 分 '+seconds%60+' 秒');}
-setInterval(updateElapsed,1000);
-function updateTask(changes){
-  importTask={...importTask,...changes};const t=importTask;feedback.hidden=view==='review';feedback.dataset.phase=t.phase;
-  working=!['completed','failed','unconfirmed'].includes(t.phase);$('open').disabled=working;
-  const titles={reading:'图片已选中，正在读取',uploading:'正在上传图片到本机',saving:'正在保存原图',queued:'原图已保存，排队等待识别',processing:'原图已保存，Codex 正在识别',reconnecting:'暂时无法读取识别进度',connectionLost:'连接暂时中断，请检查进度',completed:t.count?'识别完成 · '+t.count+' 道题待核对':'识别完成 · 未找到题目',failed:'本次识别未完成',unconfirmed:'上传结果尚未确认'};
-  $('feedbackTitle').textContent=titles[t.phase];$('feedbackFile').textContent=t.name+(t.size?' · '+(t.size/1024/1024).toFixed(2)+' MB':'');$('feedbackMessage').textContent=t.message||'';
-  $('progress').textContent=titles[t.phase];$('open').textContent=working?'正在处理本次图片…':'＋ 打开图片并识别';
-  const src=previewUrl||(t.id?'/images/'+t.id:'');$('feedbackImage').hidden=!src;if(src&&$('feedbackImage').getAttribute('src')!==src)$('feedbackImage').src=src;
-  const step=t.phase==='reading'?0:t.phase==='uploading'||t.phase==='unconfirmed'?1:t.phase==='completed'?3:2;
-  feedback.querySelectorAll('.import-steps li').forEach((el,i)=>{el.className=i<step?'done':i===step?'current':'';if(i===step)el.setAttribute('aria-current','step');else el.removeAttribute('aria-current');});
-  $('feedbackMeter').hidden=t.phase!=='uploading';if(t.percent==null)$('feedbackMeter').removeAttribute('value');else $('feedbackMeter').value=t.percent;
-  $('feedbackHint').textContent=['queued','processing','reconnecting','connectionLost'].includes(t.phase)?'整页试卷或图形较多时可能需要几分钟，完成后自动显示题目数量。你可以继续查看已有题目。':t.phase==='completed'?'原图和结果已保存在本地。题目需核对后才进入复习库。':t.phase==='failed'&&t.id?'原图仍保存在本机，可重新选择图片重试。':'';
-  $('feedbackResults').hidden=t.phase!=='completed'||!t.count;$('feedbackCheck').hidden=t.phase!=='connectionLost';$('feedbackRefresh').hidden=t.phase!=='unconfirmed';
-  if(t.id){try{sessionStorage.setItem('mido-last-import',JSON.stringify({id:t.id,name:t.name,startedAt:t.startedAt,size:t.size,endedAt:t.endedAt}));}catch{/* Storage is optional; the server retains task state. */}}
-  updateElapsed();
+const $ = id => document.getElementById(id);
+const escape = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const states = {pending:'待确认',incorrect:'错误',correct:'正确',partial:'部分正确',unanswered:'未作答',no_answer:'无原作答'};
+const marks = {unmarked:'未见批改',incorrect:'判错',correct:'判对',partial:'部分得分',unclear:'看不清'};
+const stages = {queued:'排队中',saving:'保存原图',processing:'识别中',completed:'已完成',failed:'未完成',attention:'需处理',partial_failure:'部分失败'};
+const completeness = {complete:'题目完整',partial:'题目残缺',unclear:'完整性待核对'};
+const origins = {manual:'人工修改',recognition:'识别判断',legacy:'旧记录'};
+let view='import', questions=[], batches=[], materials=[], selected=null, currentQuestion=null, batchFilter='', statusFilter='', tagFilter='', includeRemoved=false;
+let dirty=false, uploading=false, uploadPending=null, refreshing=false, selectionVersion=0, fieldSerial=0, filtersDirty=false;
+const drafts=new Map();
+const keys = new Map();
+const key = name => { if(!keys.has(name))keys.set(name,crypto.randomUUID());return keys.get(name); };
+const when = d => d ? new Date(d).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'}) : '';
+function math(value) {
+  let t=escape(value);
+  const atom=s=>'<'+(/^-?\d+(?:\.\d+)?$/.test(s)?'mn':'mi')+'>'+s+'</'+(/^-?\d+(?:\.\d+)?$/.test(s)?'mn':'mi')+'>';
+  const fraction=(n,d)=>'<math xmlns="http://www.w3.org/1998/Math/MathML"><mfrac>'+atom(n)+atom(d)+'</mfrac></math>';
+  t=t.replace(/\\frac\{(-?[a-zA-Z0-9]+(?:\.\d+)?)\}\{(-?[a-zA-Z0-9]+(?:\.\d+)?)\}/g,(_,n,d)=>fraction(n,d));
+  t=t.replace(/(-?\d+(?:\.\d+)?)\s*\/\s*(-?\d+(?:\.\d+)?)/g,(_,n,d)=>fraction(n,d));
+  t=t.replace(/\\overline\{([a-zA-Z0-9]+)\}/g,(_,n)=>'<math xmlns="http://www.w3.org/1998/Math/MathML"><mover accent="true"><mrow>'+n.match(/\d+|[a-zA-Z]/g).map(atom).join('')+'</mrow><mo>¯</mo></mover></math>');
+  t=t.replace(/\b(\d+|[a-zA-Z])\^(?:\{(-?\d+)\}|(-?\d+))/g,(_,base,a,b)=>'<math xmlns="http://www.w3.org/1998/Math/MathML"><msup>'+atom(base)+'<mn>'+(a||b)+'</mn></msup></math>');
+  return t.replace(/\\times/g,'×').replace(/\\div/g,'÷').replace(/\\cdots|\\ldots/g,'…').replace(/\\[()[\]]/g,'').replace(/\n/g,'<br>');
 }
-async function readJob(id){return api('/api/jobs/'+id,{signal:AbortSignal.timeout(20000)});}
-async function watchImport(id){const version=++watchVersion;let failures=0;
-  while(version===watchVersion){try{const state=await readJob(id);if(version!==watchVersion)return;failures=0;
-    if(state.state==='processing'){updateTask({phase:({queued:'queued',saving:'saving'})[state.stage]||'processing',message:state.message||'正在识别题目、原作答和可能错因……'});}
-    else{updateTask({phase:state.state==='completed'?'completed':'failed',count:state.count||0,message:state.message,endedAt:importTask.endedAt||Date.now()});try{await reload();if(!selected&&view!=='review'){view='pending';render();}}catch{ $('feedbackMessage').textContent+=' 题目列表读取失败，请刷新页面查看。';}return;}
-  }catch{failures++;updateTask({phase:failures>=3?'connectionLost':'reconnecting',message:'暂时无法连接本机服务，后台可能仍在识别。无需重复上传。'});if(failures>=3)return;}
-  await new Promise(resolve=>setTimeout(resolve,1500));
+async function api(path,options={}) {
+  const r=await fetch(path,{...options,headers:{'Content-Type':'application/json','X-Mido-Client':'desktop',...options.headers}});
+  let data;try{data=await r.json();}catch{throw new Error('本机返回了无法读取的结果，请检查进度后再试。');}
+  if(!r.ok)throw new Error(data.error||'请求未完成');return data;
+}
+const send=(path,data,method='POST')=>api(path,{method,body:JSON.stringify(data)});
+const review=new ReviewUI({api,math,escape,active:()=>view==='review'});
+function notice(message,error=false){$('notice').hidden=false;$('notice').className='notice '+(error?'error':'');$('notice').textContent=message;}
+const opts=(values,value)=>Object.entries(values).map(([k,label])=>'<option value="'+escape(k)+'" '+(k===value?'selected':'')+'>'+escape(label)+'</option>').join('');
+function input(label,name,value='',area=false){const id='field-'+(++fieldSerial);return '<div class="field"><label for="'+id+'">'+escape(label)+'</label>'+(area?'<textarea id="'+id+'" name="'+name+'">'+escape(value)+'</textarea>':'<input id="'+id+'" name="'+name+'" value="'+escape(value)+'">')+'</div>';}
+function select(label,name,values,value){const id='field-'+(++fieldSerial);return '<div class="field"><label for="'+id+'">'+escape(label)+'</label><select id="'+id+'" name="'+name+'">'+opts(values,value)+'</select></div>';}
+const tags=q=>[...new Set([q.content.subject,q.content.knowledgePoint,...(q.content.tags||[])].filter(Boolean))];
+const attemptStates=()=>Object.fromEntries(Object.entries(states).filter(([s])=>s!=='no_answer'));
+function source(s,label='原图') {
+  if(!s?.imageUrl)return '';
+  const b=s.bbox,valid=b&&['x','y','width','height'].every(k=>Number.isFinite(b[k]));
+  return '<figure class="source"><a href="'+escape(s.imageUrl)+'" target="_blank" rel="noopener"><div class="source-image"><img src="'+escape(s.imageUrl)+'" alt="'+escape(label)+'">'+(valid?'<span class="source-box" data-box="'+escape(JSON.stringify(b))+'"></span>':'')+'</div></a><figcaption>'+escape(s.location||label)+' · 点击查看完整原图</figcaption><button data-action="evidence" data-id="'+escape(s.photoId)+'">查看初始识别</button></figure>';
+}
+function draftKey(form){return form.dataset.form+':'+(form.dataset.id||'');}
+function captureDraft(event){const form=event.target.closest('form[data-form]');if(!form)return;drafts.set(draftKey(form),{questionId:selected,values:[...form.elements].filter(el=>el.name&&el.type!=='hidden').map(el=>({name:el.name,value:el.value,checked:el.checked,type:el.type}))});dirty=true;}
+function restoreDrafts(){for(const form of $('detail').querySelectorAll('form[data-form]')){const d=drafts.get(draftKey(form));if(d?.questionId!==selected)continue;for(const v of d.values){const matches=[...form.elements].filter(el=>el.name===v.name),el=v.type==='checkbox'?matches.find(el=>el.value===v.value):matches[0];if(!el)continue;if(v.type==='checkbox')el.checked=v.checked;else el.value=v.value;}}dirty=[...drafts.values()].some(d=>d.questionId===selected);}
+function evidenceText(value) {
+  if(value==null)return '未记录';
+  if(typeof value==='string')return value;
+  if(Array.isArray(value))return value.map(evidenceText).join('；');
+  const labels={number:'题号',subject:'学科',question:'题干',studentAnswer:'孩子原作答',knowledgePoint:'知识点',tags:'标签',sharedMaterial:'共用材料',diagramDescription:'配图说明',statusReason:'状态说明',reason:'判断依据',observedError:'可观察错误',possibleCause:'可能错因',score:'得分',comment:'评语与订正',evidence:'批改证据',text:'材料文字',description:'材料说明'};
+  const parts=value.content?[evidenceText(value.content)]:[];
+  for(const [k,label] of Object.entries(labels))if(value[k]!==undefined&&value[k]!==''&&(!Array.isArray(value[k])||value[k].length))parts.push(label+'：'+evidenceText(value[k]));
+  if(value.status)parts.push('作答状态：'+(states[value.status]||'待确认'));
+  if(value.mark)parts.push('老师判断：'+(marks[value.mark]||value.mark));
+  if(value.verdict)parts.push('AI判断：'+(states[value.verdict]||'无法判断'));
+  if(value.teacherReview)parts.push('老师批改：'+evidenceText(value.teacherReview));
+  if(value.aiAssessment)parts.push('AI记录：'+evidenceText(value.aiAssessment));
+  if(value.verified!==undefined)parts.push(value.verified?'题目已核对':'题目待核对');
+  return parts.join('\n')||'记录已保留';
+}
+function history(rows=[]) {
+  const kinds={question_created:'初次保存题目',question_edited:'修改题目信息',question_removed:'移除误识别题',attempt_created:'保存原作答',attempt_edited:'修改原作答',material_created:'保存共用材料',material_edited:'修改共用材料',question_split:'拆分题目',question_merged:'合并题目'};
+  return rows.length?'<ol class="history">'+rows.map(h=>'<li>'+escape(origins[h.source]||h.source)+' · '+escape(when(h.createdAt))+'<details><summary>'+(kinds[h.kind]||'记录变更')+' · 对照修改前后</summary><strong>修改前</strong><p>'+math(evidenceText(h.before))+'</p><strong>修改后</strong><p>'+math(evidenceText(h.after))+'</p></details></li>').join('')+'</ol>':'<p class="muted">没有修改记录。</p>';
+}
+async function load() {
+  [questions,batches,materials]=await Promise.all([api('/api/intake/questions?includeRemoved=1'),api('/api/intake/batches'),api('/api/intake/materials')]);
+  $('questionCount').textContent=questions.filter(q=>!q.removed).length;
+  $('attentionCount').textContent=batches.reduce((n,b)=>n+b.decisions.filter(d=>d.state==='pending').length+b.fragments.filter(f=>f.state==='unlinked'&&f.warning).length+b.photos.filter(p=>p.state==='failed').length,0);
+}
+function questionCard(q) {
+  return '<article class="item question-card '+(q.removed?'removed':'')+'"><span class="tag status-'+q.latestStatus+'">'+(states[q.latestStatus]||'待确认')+'</span><span class="tag">'+(q.verified?'已核对':'已保存 · 待核对')+'</span>'+(q.everWrong?'<span class="tag">曾做错</span>':'')+(q.removed?'<span class="tag">已移除</span>':'')+'<p class="question-text">'+math(q.content.question||'题干缺失，请对照原图补充')+'</p><p class="muted">'+escape(tags(q).join(' · '))+' · 第 '+escape(q.content.number||'?')+' 题 · '+q.attempts.length+' 次原作答</p><button data-action="question" data-id="'+q.id+'">查看与修改</button></article>';
+}
+function decisionCard(d,batch) {
+  if(d.type==='photo_similarity') {
+    const photo=batch.photos.find(p=>p.id===d.photoId);
+    return '<section class="decision"><h3>照片看起来相似，请确认</h3><p>'+escape(photo?.name||'本次照片')+' 可能是已有照片的缩放或压缩版本。若有新答案或批改，请继续识别。</p>'+source({photoId:d.photoId,imageUrl:'/api/intake/photos/'+d.photoId+'/image'},'本次照片')+'<button class="primary" data-action="decision" data-id="'+d.id+'" data-resolution="recognize">有新内容，继续识别</button>'+d.candidates.map(c=>'<div class="candidate">'+source({photoId:c.id,imageUrl:'/api/intake/photos/'+c.id+'/image'},'已有相似照片')+'<button data-action="decision" data-id="'+d.id+'" data-resolution="skip" data-photo="'+c.id+'">与这张相同，复用结果</button></div>').join('')+'</section>';
+  }
+  const raw=d.question||{},content=raw.content||raw;
+  return '<section class="decision"><h3>发现可能重复的题目</h3><p class="question-text">'+math(content.question||'')+'</p><p>本次原作答：'+math(raw.studentAnswer||'未识别到文字作答')+'</p>'+source(d.source,'本次题目原图')+'<button data-action="decision" data-id="'+d.id+'" data-resolution="new">这是不同题，单独保存</button>'+d.candidates.map(c=>{
+    const q=c.question;if(!q)return '';
+    return '<div class="candidate"><strong>已有题目</strong><p>'+math(q.content.question)+'</p><p class="muted">'+(c.kind==='exact'?'题干匹配':'高度疑似')+' · 已有'+q.attempts.length+'次原作答。数值或条件不同请单独保存。</p><details><summary>对照已有来源与作答</summary>'+q.sources.map(s=>source(s)).join('')+q.attempts.map(a=>'<p>'+escape(when(a.createdAt))+' · '+states[a.status]+'：'+math(a.studentAnswer||'见图片')+'</p>').join('')+'</details><button data-action="decision" data-id="'+d.id+'" data-resolution="link" data-question="'+q.id+'">同一道题，新增这次作答</button>'+q.attempts.map((a,i)=>'<button data-action="decision" data-id="'+d.id+'" data-resolution="same_attempt" data-question="'+q.id+'" data-attempt="'+a.id+'">是第'+(i+1)+'次作答重拍，只补来源</button>').join('')+'</div>';
+  }).join('')+'</section>';
+}
+function batchAttention(b) {
+  return b.decisions.filter(d=>d.state==='pending').map(d=>decisionCard(d,b)).join('')+b.fragments.filter(f=>f.state==='unlinked'&&f.warning).map(f=>{
+    const candidates=b.questions.filter(q=>!q.removed);
+    return '<section class="decision"><h3>作答尚未关联 · 第 '+escape(f.number||'?')+' 题</h3><p>'+escape(f.warning)+'</p><p>原作答：'+math(f.studentAnswer||'作答见原图')+'</p>'+source({photoId:f.photoId,imageUrl:'/api/intake/photos/'+f.photoId+'/image',location:f.sourceLocation,bbox:f.bbox},'未关联作答')+(candidates.length?'<form data-form="fragment" data-id="'+f.id+'">'+select('手动指定本批对应题目','questionId',{'':'请选择',...Object.fromEntries(candidates.map(q=>[q.id,(q.content.number||'?')+' · '+q.content.question.slice(0,80)]))},'')+'<button>关联这次作答</button></form>':'<p class="muted">本批没有可关联题目。照片和告警已保留，不搜索历史题目。</p>')+'</section>';
+  }).join('');
+}
+function batchCard(b) {
+  return '<article class="item batch-card"><div class="card-heading"><strong>'+escape(when(b.createdAt))+'</strong><span class="tag">'+(stages[b.state]||b.state)+'</span></div><p>'+b.photos.length+' 张照片 · '+b.photos.filter(p=>p.state==='completed').length+' 张处理完成 · '+b.questions.length+' 道题已保存</p><div class="photo-list">'+b.photos.map(p=>'<div class="photo-row"><a href="'+escape(p.imageUrl)+'" target="_blank" rel="noopener"><img src="'+escape(p.imageUrl)+'" alt="'+escape(p.name)+'"></a><div><strong>'+escape(p.name)+'</strong><p class="muted">'+(stages[p.state]||p.state)+(p.reused?' · 原图已存在，复用识别结果':'')+'</p>'+(p.error?'<p class="error-text">'+escape(p.error)+'</p>':'')+'<button data-action="evidence" data-id="'+p.id+'">原图与初始识别</button></div></div>').join('')+'</div><div class="actions"><button data-action="batch" data-id="'+b.id+'">查看本批题目</button>'+(b.photos.some(p=>p.state==='failed')||b.state==='partial_failure'?'<button data-action="retry" data-id="'+b.id+'">重试失败部分</button>':'')+'</div>'+batchAttention(b)+'</article>';
+}
+function render() {
+  document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
+  $('heading').textContent={import:'照片录入',questions:'题目档案',attention:'待处理',review:'复习'}[view];
+  $('subheading').textContent=view==='review'?'先独立作答，提交后再批阅':'全部题目自动保存；明确错误有依据，其余可以稍后核对';
+  $('uploadEntry').hidden=view!=='import';
+  if(view==='review'){void review.home();return;}
+  if(view==='import'){$('chat').innerHTML=batches.length?batches.map(batchCard).join(''):'<div class="empty">还没有导入照片。选择这次的照片即可开始。</div>';return;}
+  if(view==='attention'){$('chat').innerHTML='<h2>这些地方需要你看一眼</h2><p>其余确定的题目已正常保存。</p>'+(batches.filter(b=>b.decisions.some(d=>d.state==='pending')||b.fragments.some(f=>f.state==='unlinked'&&f.warning)||b.photos.some(p=>p.state==='failed')).map(batchCard).join('')||'<div class="empty">目前没有待处理的重复、作答关联或失败任务。</div>');return;}
+  const list=questions.filter(q=>(includeRemoved||!q.removed)&&(!statusFilter||q.latestStatus===statusFilter)&&(!tagFilter||tags(q).some(t=>t.includes(tagFilter)))&&(!batchFilter||batches.find(b=>b.id===batchFilter)?.questions.some(other=>other.id===q.id)));
+  $('chat').innerHTML='<div class="filters">'+select('作答状态','filterStatus',{'':'全部状态',...states},statusFilter)+input('标签或知识点','filterTag',tagFilter)+'<label class="check"><input name="includeRemoved" type="checkbox" '+(includeRemoved?'checked':'')+'>显示已移除记录</label><button data-action="filter">筛选</button><button data-action="clear-filter">全部题目</button><button class="primary" data-action="add">＋ 补录漏题</button></div>'+(batchFilter?'<p class="notice">当前仅查看所选上传批次的题目。</p>':'')+'<p class="muted">共 '+list.length+' 道题。保存与核对完成分开，状态不代表已经掌握。</p><div class="question-grid">'+list.map(questionCard).join('')+'</div>'+(!list.length?'<div class="empty">没有符合条件的题目。</div>':'');
+}
+function closePanel(){drafts.clear();selected=null;currentQuestion=null;dirty=false;++selectionVersion;$('panel').hidden=true;$('closePanel').hidden=true;}
+function mayLeave(){return !dirty||window.confirm('这里有尚未保存的修改，确定放弃这些修改吗？');}
+async function navigate(next){if(!mayLeave())return;closePanel();view=next;$('notice').hidden=true;await load();render();}
+function contentFields(c={}) {
+  return input('题号','number',c.number)+select('学科','subject',{'':'未分类',数学:'数学',语文:'语文',其他:'其他'},c.subject||'')+input('题干','question',c.question,true)+input('知识点','knowledgePoint',c.knowledgePoint)+input('标签（逗号分隔，可留空）','tags',(c.tags||[]).join('，'))+select('题目完整性','completeness',completeness,c.completeness||'unclear')+input('配图关系说明','diagramDescription',c.diagramDescription,true)+input('共用材料文字','sharedMaterial',c.sharedMaterial,true)+input('原图位置说明','sourceLocation',c.sourceLocation)+(materials.length?'<fieldset><legend>关联已有共用材料</legend>'+materials.map(m=>'<label class="check"><input type="checkbox" name="materialIds" value="'+m.id+'" '+((c.materialIds||[]).includes(m.id)?'checked':'')+'><span>'+escape((m.text||m.description||'共用材料').slice(0,120))+'</span></label>').join('')+'</fieldset>':'');
+}
+function contentFrom(form,previous={}) {
+  const d=new FormData(form),content={...previous};
+  for(const k of ['number','subject','question','knowledgePoint','completeness','diagramDescription','sharedMaterial','sourceLocation'])content[k]=String(d.get(k)||'');
+  content.tags=String(d.get('tags')||'').split(/[,，\n]/).map(s=>s.trim()).filter(Boolean);content.materialIds=d.getAll('materialIds');return content;
+}
+function teacherFields(t={}){return select('老师批改','mark',marks,t.mark||'unmarked')+input('得分（原样记录）','score',t.score)+input('老师评语与订正','comment',t.comment,true)+input('批改痕迹与位置','evidence',t.evidence,true);}
+function teacherFrom(form){const d=new FormData(form);return Object.fromEntries(['mark','score','comment','evidence'].map(k=>[k,String(d.get(k)||'')]));}
+function attemptCard(a,i) {
+  return '<section class="attempt"><h3>第 '+(i+1)+' 次原作答</h3><p class="muted">'+escape(when(a.createdAt))+' · '+escape(origins[a.statusSource]||a.statusSource)+'</p><form data-form="attempt" data-id="'+a.id+'"><input type="hidden" name="revision" value="'+a.revision+'">'+input('孩子原答案和过程','studentAnswer',a.studentAnswer,true)+teacherFields(a.teacherReview)+select('这次作答状态','status',attemptStates(),a.status)+input('状态修改说明','statusReason',a.statusReason,true)+'<button class="primary">保存这次作答</button></form><details><summary>查看 AI 原始判断与可能错因</summary><p>'+escape(states[a.aiAssessment?.verdict]||'无法判断')+'：'+math(a.aiAssessment?.reason||'')+'</p><p>可观察错误：'+math(a.observedError||'未记录')+'</p><p>可能错因（待确认）：'+math(a.possibleCause||'未提出')+'</p><p>'+escape((a.unclear||[]).join('；'))+'</p></details><details><summary>这次作答的来源</summary>'+a.sources.map(s=>source(s,'原作答来源')).join('')+'</details><details><summary>这次作答的修改记录</summary>'+history(a.history)+'</details></section>';
+}
+async function showQuestion(id,force=false) {
+  if(!force&&!mayLeave())return;const version=++selectionVersion,q=await api('/api/intake/questions/'+id);if(version!==selectionVersion)return;
+  selected=id;currentQuestion=q;dirty=false;$('panel').hidden=false;$('closePanel').hidden=false;$('panelTitle').textContent='第 '+(q.content.number||'?')+' 题 · '+(states[q.latestStatus]||'待确认');
+  $('detail').innerHTML=(q.removed?'<div class="notice">此题已移除，来源和历史仍保留。'+(q.redirectId?'<button data-action="question" data-id="'+q.redirectId+'">查看合并后的题目</button>':'')+'</div>':'')+'<span class="tag">'+(q.verified?'已核对':'已保存 · 待核对')+'</span>'+(q.everWrong?'<span class="tag">曾做错</span>':'')+'<div class="math-preview">'+math(q.content.question||'题干缺失，待补充')+'</div><details open><summary>对照原图</summary>'+q.sources.map(s=>source(s)).join('')+(!q.sources.length?'<p class="muted">手动补录题，尚未关联照片。</p>':'')+'</details><form data-form="question" data-id="'+q.id+'"><h3>题目信息</h3><input type="hidden" name="revision" value="'+q.revision+'">'+contentFields(q.content)+'<label class="check"><input name="verified" type="checkbox" '+(q.verified?'checked':'')+'>我已核对题干与必要配图</label><button class="primary">保存题目修改</button></form>'+q.materials.map(m=>'<details><summary>编辑关联共用材料</summary><form data-form="material" data-id="'+m.id+'"><input type="hidden" name="revision" value="'+m.revision+'">'+input('材料文字','text',m.text,true)+input('材料说明','description',m.description,true)+'<button>保存共用材料</button></form><p class="muted">共用此材料的小题一起更新，初始识别保留。</p>'+history(m.history)+'</details>').join('')+'<h3>原作答记录 · '+q.attempts.length+' 次</h3>'+q.attempts.map(attemptCard).join('')+(!q.attempts.length?'<p class="notice">本题没有原作答，不计为做错。</p>':'')+(!q.removed?'<details><summary>＋ 补录一次原作答</summary><form data-form="new-attempt" data-id="'+q.id+'">'+input('孩子原答案和过程','studentAnswer','',true)+teacherFields()+select('作答状态','status',attemptStates(),'pending')+input('状态说明','statusReason')+'<button>保存新增作答</button></form></details><details><summary>整理题目边界</summary><p class="muted">来源与历史继续保留。</p><div class="actions"><button data-action="split" data-id="'+q.id+'">拆分小题</button><button data-action="merge" data-id="'+q.id+'">合并重复题</button><button class="danger" data-action="remove" data-id="'+q.id+'">移除误识别题</button></div></details>':'')+'<details><summary>题目初始记录与修改历史</summary>'+history(q.history)+'</details>';restoreDrafts();
+}
+function dialog(title,body){$('dialogTitle').textContent=title;$('dialogBody').innerHTML=body;$('editorDialog').showModal();}
+function openAdd(){keys.delete('add');dialog('补录漏题','<form data-form="add">'+contentFields()+select('关联来源照片（可不选）','photoId',{'':'不关联照片',...Object.fromEntries([...new Map(batches.flatMap(b=>b.photos).map(p=>[p.id,p])).values()].map(p=>[p.id,p.name]))},'')+'<button class="primary">保存题目</button></form>');}
+function openSplit(q){
+  keys.delete('split');dialog('拆分为独立小题','<form data-form="split" data-id="'+q.id+'"><p>用一行“---”分隔小题。其他信息、材料与来源保留。</p>'+input('小题题干，每题之间一行 ---','parts',q.content.question,true)+'<h3>原作答归属</h3><p class="muted">不确定的作答留在原记录，不删除。</p>'+q.attempts.map((a,i)=>select('第'+(i+1)+'次：'+(a.studentAnswer.slice(0,70)||'见图片'),'attempt-'+a.id,{'':'保留在原记录',...Object.fromEntries(Array.from({length:10},(_,n)=>[n+1,'移到第'+(n+1)+'个小题']))},'')).join('')+'<button class="primary">保存拆分</button></form>');
+}
+function openMerge(q){keys.delete('merge');dialog('合并到当前题目','<form data-form="merge" data-id="'+q.id+'"><p>同一道题才合并，各次作答、材料与来源保留。</p>'+questions.filter(other=>!other.removed&&other.id!==q.id).map(other=>'<label class="check"><input name="questionIds" type="checkbox" value="'+other.id+'"><span>'+escape(other.content.question.slice(0,150)||'题干缺失')+'</span></label>').join('')+'<button class="primary">合并选中的题目</button></form>');}
+async function evidence(id){
+  const p=await api('/api/intake/photos/'+id),e=p.extraction;
+  const records=e?[...(e.questions||[]),...(e.answers||[])]:[];
+  dialog('原图与初始识别 · '+p.name,'<a href="'+escape(p.imageUrl)+'" target="_blank" rel="noopener"><img class="evidence-image" src="'+escape(p.imageUrl)+'" alt="初始照片"></a><p class="muted">初始识别不会被人工修改覆盖，可与当前题目对照。</p>'+(e?'<p>'+escape([e.paper?.title,e.paper?.subject,e.paper?.grade,e.paper?.pageNumber].filter(Boolean).join(' · '))+'</p>'+records.map(r=>'<section class="item"><p>'+math(evidenceText(r))+'</p></section>').join('')+((e.unclear||[]).length?'<p class="notice">'+escape(e.unclear.join('；'))+'</p>':''):'<p>尚未取得识别结果。原图已保存。</p>'));
+}
+async function saved(message,id=selected){dirty=false;await load();if(view!=='review')render();if(id)await showQuestion(id,true);notice(message);}
+async function submitForm(form){
+  const type=form.dataset.form,id=form.dataset.id,d=new FormData(form);
+  switch(type){
+    case 'question':await send('/api/intake/questions/'+id,{content:contentFrom(form,currentQuestion.content),verified:d.has('verified'),expectedRevision:Number(d.get('revision'))},'PATCH');return saved('题目信息已保存，初始识别与作答历史仍保留。',id);
+    case 'attempt':{const old=currentQuestion.attempts.find(a=>a.id===id),reason=d.get('status')!==old.status&&d.get('statusReason')===old.statusReason?'手动修改作答状态':d.get('statusReason');await send('/api/intake/attempts/'+id,{studentAnswer:String(d.get('studentAnswer')),teacherReview:teacherFrom(form),status:d.get('status'),statusReason:reason,expectedRevision:Number(d.get('revision'))},'PATCH');return saved('这次原作答与状态已保存。');}
+    case 'new-attempt':await send('/api/intake/questions/'+id+'/attempts',{requestId:key('attempt:'+id),studentAnswer:d.get('studentAnswer'),teacherReview:teacherFrom(form),status:d.get('status'),statusReason:d.get('statusReason')});keys.delete('attempt:'+id);return saved('新增原作答已保存，旧作答不变。',id);
+    case 'material':await send('/api/intake/materials/'+id,{text:d.get('text'),description:d.get('description'),expectedRevision:Number(d.get('revision'))},'PATCH');return saved('共用材料已保存。');
+    case 'fragment':if(!d.get('questionId'))throw new Error('请选择本批对应题目。');await send('/api/intake/fragments/'+id+'/link',{requestId:key('fragment:'+id),questionId:d.get('questionId')});dirty=false;await load();render();return notice('已将作答关联到本批题目。');
+    case 'add':{
+      const content=contentFrom(form);if(!content.question.trim())throw new Error('请填写题干；残缺题可说明已知部分。');
+      const photoId=d.get('photoId'),q=await send('/api/intake/questions',{requestId:key('add'),content,sources:photoId?[{photoId,location:content.sourceLocation}]:[]});
+      $('editorDialog').close();view='questions';batchFilter='';statusFilter='';tagFilter='';includeRemoved=false;return saved('补录题目已保存，可以继续补充原作答。',q.id);
+    }
+    case 'split':{
+      const texts=String(d.get('parts')).split(/\r?\n\s*---\s*\r?\n/).map(s=>s.trim()).filter(Boolean);if(texts.length<2)throw new Error('至少填写两道小题，用独占一行的 --- 分隔。');
+      const parts=texts.map((text,i)=>({content:{...currentQuestion.content,question:text,number:currentQuestion.content.number+'('+(i+1)+')'},sources:currentQuestion.sources,attemptIds:currentQuestion.attempts.filter(a=>Number(d.get('attempt-'+a.id))===i+1).map(a=>a.id)}));
+      if(currentQuestion.attempts.some(a=>Number(d.get('attempt-'+a.id))>parts.length))throw new Error('原作答分配的小题不存在。');
+      const result=await send('/api/intake/questions/'+id+'/split',{requestId:key('split'),parts});$('editorDialog').close();batchFilter='';statusFilter='';tagFilter='';return saved('小题已拆分。未分配作答保留在原记录，可显示已移除记录查看。',result[0].id);
+    }
+    case 'merge':{
+      const questionIds=d.getAll('questionIds');if(!questionIds.length)throw new Error('请至少选择一道需要合并的题。');
+      const q=await send('/api/intake/questions/'+id+'/merge',{requestId:key('merge'),questionIds});$('editorDialog').close();return saved('题目已合并，各次作答、来源和历史均保留。',q.id);
+    }
   }
 }
-function uploadImage(payload){return new Promise((resolve,reject)=>{const xhr=new XMLHttpRequest();xhr.open('POST','/api/import');xhr.setRequestHeader('Content-Type','application/json');xhr.setRequestHeader('X-Mido-Client','desktop');xhr.timeout=90000;
-  xhr.upload.onprogress=e=>{const percent=e.lengthComputable?Math.round(e.loaded/e.total*100):null;updateTask({phase:'uploading',percent,message:percent===100?'图片已传送完毕，等待本机确认保存……':percent==null?'正在把图片传送到本机服务……':'已上传 '+percent+'%'});};
-  xhr.onload=()=>{let data;try{data=JSON.parse(xhr.responseText);}catch{reject(new Error('本机返回了无法读取的上传结果'));return;}if(xhr.status>=200&&xhr.status<300)resolve(data);else reject(new Error(data.error||'上传失败'));};xhr.onerror=()=>reject(new Error('上传连接中断，是否保存成功尚未确认'));xhr.ontimeout=()=>reject(new Error('等待上传响应超时，是否保存成功尚未确认'));xhr.send(JSON.stringify(payload));});}
-$('feedbackResults').onclick=()=>{view='pending';selected=null;render();const first=questions.find(q=>q.importId===importTask.id);if(first)choose(first.id);};$('feedbackCheck').onclick=()=>{updateTask({phase:'reconnecting',message:'正在重新读取本次任务状态……'});void watchImport(importTask.id);};$('feedbackRefresh').onclick=()=>location.reload();
+async function action(b){
+  const a=b.dataset.action,id=b.dataset.id;
+  switch(a){
+    case 'question':return showQuestion(id);
+    case 'close-panel':if(mayLeave())closePanel();return;
+    case 'batch':if(!mayLeave())return;closePanel();batchFilter=id;view='questions';render();return;
+    case 'retry':await send('/api/intake/batches/'+id+'/retry',{});await load();render();return notice('已重试失败部分，成功结果继续复用。');
+    case 'decision':await send('/api/intake/decisions/'+id,{action:b.dataset.resolution,...(b.dataset.photo?{photoId:b.dataset.photo}:{}),...(b.dataset.question?{questionId:b.dataset.question}:{}),...(b.dataset.attempt?{attemptId:b.dataset.attempt}:{})});await load();render();return notice('处理选择已保存，其他题目不受影响。');
+    case 'filter':filtersDirty=false;statusFilter=document.querySelector('[name=filterStatus]').value;tagFilter=document.querySelector('[name=filterTag]').value.trim();includeRemoved=document.querySelector('[name=includeRemoved]').checked;render();return;
+    case 'clear-filter':filtersDirty=false;statusFilter='';tagFilter='';includeRemoved=false;batchFilter='';render();return;
+    case 'add':if(!mayLeave())return;closePanel();return openAdd();
+    case 'split':if(mayLeave()){drafts.clear();dirty=false;openSplit(currentQuestion);}return;
+    case 'merge':if(mayLeave()){drafts.clear();dirty=false;openMerge(currentQuestion);}return;
+    case 'remove':if(!window.confirm('移除误识别题？原图、原作答和历史仍保留。'))return;await api('/api/intake/questions/'+id,{method:'DELETE'});return saved('题目已移除，可显示已移除记录查看。',id);
+    case 'evidence':return evidence(id);
+  }
+}
+async function execute(button,fn){if(button)button.disabled=true;try{await fn();}catch(e){const message=e.message+(/已更新/.test(e.message)?' 请先保留当前输入，再重新打开记录核对。':'');notice(message,true);if($('editorDialog').open){let box=$('dialogError');if(!box){box=document.createElement('p');box.id='dialogError';box.className='notice error';box.setAttribute('role','alert');$('dialogBody').prepend(box);}box.textContent=message;}}finally{if(button?.isConnected)button.disabled=false;}}
+document.addEventListener('input',e=>{if(e.target.closest('.filters'))filtersDirty=true;});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(b)void execute(b,()=>action(b));});
+document.addEventListener('submit',e=>{const form=e.target;if(!form.dataset.form)return;e.preventDefault();void execute(e.submitter,async()=>{const id=draftKey(form),d=drafts.get(id);drafts.delete(id);try{await submitForm(form);}catch(error){if(d)drafts.set(id,d);throw error;}});});
+$('detail').addEventListener('input',captureDraft);$('detail').addEventListener('change',captureDraft);
+document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{void execute(b,()=>navigate(b.dataset.view));});
+$('closePanel').onclick=()=>{if(mayLeave())closePanel();};$('open').onclick=()=>$('file').click();
+async function upload(){
+  if(!uploadPending||uploading)return;uploading=true;$('open').disabled=true;$('retryUpload').hidden=true;$('uploadStatus').textContent='正在保存'+uploadPending.files.length+'张照片并检查重复……';
+  try{await send('/api/intake/batches',uploadPending);uploadPending=null;$('uploadStatus').textContent='原图已保存，可在下方查看每张照片进度，结果自动保存。';await load();if(view!=='review')render();}
+  catch(e){$('retryUpload').hidden=false;notice(e.message+' 上传结果可能尚未确认，请先查看批次进度；重试使用同一请求，不重复创建批次。',true);}
+  finally{uploading=false;$('open').disabled=false;}
+}
+$('retryUpload').onclick=()=>{void upload();};
 $('file').onchange=async()=>{
-  const f=$('file').files[0];if(!f||working)return;
-  if(previewUrl)URL.revokeObjectURL(previewUrl);previewUrl=URL.createObjectURL(f);++watchVersion;
-  importTask=null;updateTask({phase:'reading',name:f.name,size:f.size,startedAt:Date.now(),message:'已收到你的文件选择，正在读取图片……'});
-  if(f.size>15*1024*1024){updateTask({phase:'failed',endedAt:Date.now(),message:'图片超过 15 MB，请缩小后重新选择。未上传图片。'});$('file').value='';return;}
-  let uploading=false;
-  try{await new Promise(resolve=>requestAnimationFrame(resolve));const base64=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result.split(',')[1]);reader.onerror=()=>reject(new Error('无法读取图片，未上传。'));reader.readAsDataURL(f);});
-    uploading=true;updateTask({phase:'uploading',percent:0,message:'图片读取完成，开始上传到本机……'});const job=await uploadImage({name:f.name,base64});
-    if(!job.id)throw new Error('本机未返回任务编号，请刷新检查是否已保存');
-    updateTask({id:job.id,phase:'processing',message:'本机已确认保存原图，正在等待 Codex 返回识别结果……'});await watchImport(job.id);
-  }catch(error){updateTask({phase:uploading?'unconfirmed':'failed',endedAt:Date.now(),message:error.message+(uploading?'。请先刷新状态，避免重复上传。':'')});}
-  finally{$('file').value='';}
+  const files=Array.from($('file').files);$('file').value='';if(!files.length||uploading)return;
+  if(files.length>30||files.some(f=>f.size>15*1024*1024)){notice('一次最多30张照片，每张不超过15MB。',true);return;}
+  $('uploadStatus').textContent='正在读取'+files.length+'张照片……';$('open').disabled=true;
+  try{const input=[];for(const f of files){const base64=await new Promise((yes,no)=>{const r=new FileReader();r.onload=()=>yes(r.result.split(',')[1]);r.onerror=()=>no(new Error('无法读取照片：'+f.name));r.readAsDataURL(f);});input.push({name:f.name,base64});}uploadPending={requestId:crypto.randomUUID(),files:input};view='import';await upload();}
+  catch(e){notice(e.message,true);}finally{$('open').disabled=false;}
 };
-render();try{await reload();render();}catch(error){notice(error.message,true);}
-let remembered=null;try{remembered=JSON.parse(sessionStorage.getItem('mido-last-import')||'null');}catch{/* Storage is optional; the server retains task state. */}
-const processingImport=imports.find(item=>item.state==='processing');
-const last=processingImport||(remembered&&imports.find(item=>item.id===remembered.id));
-if(last){updateTask({id:last.id,name:last.originalName,size:remembered?.id===last.id?remembered.size:undefined,endedAt:last.state!=='processing'&&remembered?.id===last.id?remembered.endedAt:undefined,startedAt:new Date(last.startedAt||last.createdAt).getTime(),phase:'processing',message:'正在读取上次识别的状态……'});void watchImport(last.id);}
-try{const status=await api('/api/status');$('connection').textContent=status.loggedIn?'● 已登录 · '+status.authType:'需要登录 Codex';}catch(error){$('connection').textContent='连接失败';notice('无法连接 Codex：'+error.message,true);}
+async function poll(){if(refreshing)return;refreshing=true;try{if(batches.some(b=>b.state==='processing'||b.photos.some(p=>['queued','processing','saving'].includes(p.state)))){await load();if(!filtersDirty&&!$('editorDialog').open&&view!=='review')render();}}catch{notice('暂时无法读取处理进度，后台可能仍在继续，无需重复上传。',true);}finally{refreshing=false;}}
+setInterval(()=>{void poll();},1800);
+window.addEventListener('beforeunload',e=>{if(dirty){e.preventDefault();e.returnValue='';}});
+const boxes=new MutationObserver(()=>{document.querySelectorAll('.source-box[data-box]').forEach(el=>{if(el.style.left)return;const b=JSON.parse(el.dataset.box);el.style.left=Math.max(0,b.x)*100+'%';el.style.top=Math.max(0,b.y)*100+'%';el.style.width=Math.min(1,b.width)*100+'%';el.style.height=Math.min(1,b.height)*100+'%';});});boxes.observe(document.body,{childList:true,subtree:true});
+try{await load();render();}catch(e){notice(e.message,true);}
+try{const s=await api('/api/status');$('connection').textContent=s.loggedIn?'● 本机 Codex 已连接':'需要登录 Codex';}catch{$('connection').textContent='本机连接暂不可用';}
