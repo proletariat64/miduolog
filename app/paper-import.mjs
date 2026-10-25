@@ -199,9 +199,12 @@ export class PaperImports {
   }
 
   async withWriteRetry(write) {
-    while (!this.closed) {
+    while (true) {
       try { return write(); }
-      catch (error) { if (![5, 6].includes(error.errcode & 255)) throw error; }
+      catch (error) {
+        if (![5, 6].includes(error.errcode & 255)) throw error;
+        if (this.closed) return;
+      }
       // Retain the inference response in memory and retry only persistence.
       await new Promise(resolve => setTimeout(resolve, 100));
     }

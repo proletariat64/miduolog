@@ -160,3 +160,17 @@ for (const failed of [false, true]) test('a write lock during model completion r
   if (!failed) assert.equal(papers.questions(first.id)[0].content.question, 'retained result');
   assert.equal(papers.get(second.id).stage, 'completed'); assert.equal(calls, 2);
 });
+
+for (const failed of [false, true]) test('closing waits for an active recognition and persists its terminal state: ' + failed, async t => {
+  const dataDir = await testDirectory(t), db = new DatabaseSync(':memory:'), response = deferred();
+  let started = false;
+  const papers = await PaperImports.open({db, dataDir, client: {recognize: async () => { started = true; return response.promise; }}});
+  const task = await papers.submit({bytes: png('closing'), name: 'closing.png'});
+  await until(() => started);
+  const closing = papers.close();
+  if (failed) response.reject(new Error('client closed')); else response.resolve(recognition('completed while closing'));
+  await closing;
+  assert.equal(papers.get(task.id).stage, failed ? 'failed' : 'completed');
+  if (!failed) assert.equal(papers.questions(task.id)[0].content.question, 'completed while closing');
+  db.close();
+});
