@@ -83,8 +83,10 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
         if (['pending', 'confirmed', 'disputed'].includes(input.causeStatus)) accepted.causeStatus = content.causeStatus = input.causeStatus;
         const state = input.state === 'library' ? 'library' : previous.state;
         if (!content.question.trim()) { json(res, 400, {error: '题目不能为空'}); return; }
-        db.prepare('UPDATE questions SET state=?,content=? WHERE id=?').run(state, JSON.stringify(content), previous.id);
-        intake.syncLegacyQuestion(previous.id, {...accepted, ...(input.state === 'library' ? {state} : {})});
+        intake.store.transaction(() => {
+          db.prepare('UPDATE questions SET state=?,content=? WHERE id=?').run(state, JSON.stringify(content), previous.id);
+          intake.syncLegacyQuestion(previous.id, {...accepted, ...(input.state === 'library' ? {state} : {})});
+        });
         json(res, 200, {ok: true}); return;
       }
       const imageMatch = path.match(/^\/images\/([a-f0-9-]+)$/);

@@ -85,3 +85,13 @@ test('upgrade preservation detects removal of an original all-null column', asyn
   db.exec('ALTER TABLE preserved DROP COLUMN nullable');
   await assert.rejects(run(process.execPath, [script], {cwd, timeout: 10000}), /nullable/);
 });
+
+
+test('upgrade preservation detects schema loss in an empty original table', async t => {
+  let db; t.after(() => db?.close()); const cwd = await testDirectory(t);
+  await mkdir(join(cwd, 'data'), {recursive: true}); db = new DatabaseSync(join(cwd, 'data/notebook.sqlite'));
+  db.exec('CREATE TABLE empty_records(id TEXT,original_field TEXT)');
+  await run(process.execPath, [script, '--snapshot'], {cwd, timeout: 10000});
+  db.exec('ALTER TABLE empty_records DROP COLUMN original_field');
+  await assert.rejects(run(process.execPath, [script], {cwd, timeout: 10000}), /original_field/);
+});

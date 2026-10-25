@@ -24,6 +24,7 @@
     "marked": "^18.1.1"
   },
   "dependencies": {
+    "busboy": "^1.6.0",
     "sharp": "0.35.5"
   }
 }

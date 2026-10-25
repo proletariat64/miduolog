@@ -25,6 +25,7 @@ export class IntakeStore {
   }
 
   transaction(fn) {
+    if (this.db.isTransaction) return fn();
     this.db.exec('BEGIN IMMEDIATE');
     try { const result = fn(); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
@@ -60,6 +61,7 @@ export class IntakeStore {
     const data = {studentAnswer: string(raw.studentAnswer || ''), answerStatus: enumValue(raw.answerStatus, ['answered', 'unanswered', 'unclear'], raw.studentAnswer ? 'answered' : 'unclear'), teacherReview: teacher(raw.teacherReview), aiAssessment: assessment(raw.aiAssessment), status: result.status, statusReason: result.reason, statusSource: source,
       answerPresence: enumValue(raw.answerPresence, ['present', 'absent', 'unknown'], raw.studentAnswer?.trim() || raw.answerStatus === 'answered' ? 'present' : 'unknown'), answerEvidence: string(raw.answerEvidence || ''),
       observedError: string(raw.observedError || ''), possibleCause: string(raw.possibleCause || ''), causeStatus: source === 'legacy' ? enumValue(raw.causeStatus, ['pending', 'confirmed', 'disputed'], 'pending') : 'pending', unclear: raw.unclear || []};
+    if (source === 'legacy') { data.status = statuses.includes(raw.questionStatus) ? raw.questionStatus : 'pending'; data.statusReason = '旧记录保留，不重新判断'; }
     if (source === 'manual' && raw.status !== undefined) { data.status = enumValue(raw.status, statuses); data.statusReason = string(raw.statusReason || '手动录入原作答'); }
     this.db.prepare('INSERT INTO intake_attempts(id,questionId,data,sources,createdAt) VALUES (?,?,?,?,?)').run(id, questionId, encode(data), encode(sources), now());
     this.history(id, 'attempt_created', source, null, data);
@@ -149,7 +151,7 @@ export class IntakeStore {
           sources = [this.source(photo.id, c)];
         }
         const id = this.addQuestion(c, sources, {id: row.id, legacyId: row.id, verified: row.state === 'library'});
-        if (c.studentAnswer?.trim()) { const aid = this.addAttempt(id, c, sources, 'legacy'); const a = this.attempt(aid); const data = {...a, status: statuses.includes(c.questionStatus) ? c.questionStatus : 'pending', statusSource: 'legacy', statusReason: '旧记录保留，不重新判断'}; for (const k of ['id','questionId','sources','createdAt','revision','history']) delete data[k]; this.db.prepare('UPDATE intake_attempts SET data=? WHERE id=?').run(encode(data), aid); }
+        if (c.studentAnswer?.trim()) this.addAttempt(id, c, sources, 'legacy');
       }
       // Old images already have recognized questions. Reconstruct a marked legacy
       // extraction once so choosing that photo again reuses evidence, not inference.
