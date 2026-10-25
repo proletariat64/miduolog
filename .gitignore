@@ -1,0 +1,14 @@
+# 本地数据库、原图及作答图片
+/data/
+# 真实试卷样本（仅本地保留）
+/samples/
+.scratch/
+node_modules/
+__pycache__/
+*.pyc
+*.log
+.env
+.env.*
+!.env.example
+# Added by code-review-graph
+.code-review-graph/
