@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+const base='http://127.0.0.1:4318';
+const questions=await (await fetch(base+'/api/questions')).json();
+assert.equal(questions.length,2,'测试图片应拆出两题');
+assert.equal(questions.filter(q=>q.state==='library').length,1,'界面确认的题目应已入库');
+assert.equal(questions.filter(q=>q.state==='pending').length,1,'另一题应仍待核对');
+const db=new DatabaseSync('data/notebook.sqlite',{readOnly:true});
+assert.equal(db.prepare('SELECT count(*) AS n FROM questions').get().n,2);
+assert.equal(db.prepare("SELECT count(*) AS n FROM questions WHERE state='library'").get().n,1);
+db.close();
+const forbidden=await fetch(base+'/api/import',{method:'POST',headers:{'Origin':'http://example.invalid','X-Mido-Client':'desktop','Content-Type':'application/json'},body:'{}'});
+assert.equal(forbidden.status,403,'外部来源不得调用导入');
+const noHeader=await fetch(base+'/api/import',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+assert.equal(noHeader.status,403,'缺少应用标识不得导入');
+console.log('PASS：真实拆题两题、核对入库状态、本地 SQLite 独立进程读回、外部来源与缺失标识的请求拒绝。');

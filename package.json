@@ -1,0 +1,12 @@
+{
+  "name": "mido-mistake-notebook",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node app/server.mjs",
+    "test": "node scripts/test-review.mjs",
+    "verify:codex": "node scripts/verify-codex.mjs"
+  },
+  "engines": { "node": ">=24" }
+}
