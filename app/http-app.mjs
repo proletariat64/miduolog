@@ -76,15 +76,15 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
       if (req.method === 'PATCH' && qMatch) {
         const previous = db.prepare('SELECT * FROM questions WHERE id=?').get(qMatch[1]);
         if (!previous) { json(res, 404, {error: '题目不存在'}); return; }
-        const input = await body(req), content = JSON.parse(previous.content);
+        const input = await body(req), content = JSON.parse(previous.content), accepted = {};
         for (const key of ['question', 'studentAnswer', 'subject', 'knowledgePoint', 'observedError', 'possibleCause']) {
-          if (typeof input[key] === 'string') content[key] = input[key].slice(0, 30000);
+          if (typeof input[key] === 'string') accepted[key] = content[key] = input[key].slice(0, 30000);
         }
-        if (['pending', 'confirmed', 'disputed'].includes(input.causeStatus)) content.causeStatus = input.causeStatus;
+        if (['pending', 'confirmed', 'disputed'].includes(input.causeStatus)) accepted.causeStatus = content.causeStatus = input.causeStatus;
         const state = input.state === 'library' ? 'library' : previous.state;
         if (!content.question.trim()) { json(res, 400, {error: '题目不能为空'}); return; }
         db.prepare('UPDATE questions SET state=?,content=? WHERE id=?').run(state, JSON.stringify(content), previous.id);
-        intake.syncLegacyQuestion(previous.id, input);
+        intake.syncLegacyQuestion(previous.id, {...accepted, ...(input.state === 'library' ? {state} : {})});
         json(res, 200, {ok: true}); return;
       }
       const imageMatch = path.match(/^\/images\/([a-f0-9-]+)$/);

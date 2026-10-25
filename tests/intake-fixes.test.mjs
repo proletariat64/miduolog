@@ -192,3 +192,47 @@ test('resuming an interrupted multi-photo upload restores missing membership and
   const resumed = await app.settle((await app.upload(['one', 'two'])).id);
   assert.equal(resumed.id, batch.id); assert.equal(resumed.state, 'completed'); assert.equal(resumed.photos.length, 2); assert.equal(app.calls(), 3);
 });
+
+
+test('a fresh request used to recover an interrupted upload remains idempotent after completion and restart', async t => {
+  const app = await setup(t), first = await app.settle((await app.upload(['alias'])).id), requestId = crypto.randomUUID();
+  const seed = new DatabaseSync(app.databasePath); seed.prepare('UPDATE intake_batches SET sealed=0 WHERE id=?').run(first.id); seed.close();
+  assert.equal((await app.upload(['alias'], requestId)).id, first.id);
+  assert.equal((await app.upload(['alias'], requestId)).id, first.id);
+  await app.reopen(); assert.equal((await app.upload(['alias'], requestId)).id, first.id);
+  assert.equal((await app.request('/api/intake/batches')).data.length, 1);
+  const conflict = await app.request('/api/intake/batches', 'POST', {requestId, files: [{name: 'different.png', base64: png('different').toString('base64')}]});
+  assert.equal(conflict.status, 409); assert.equal(app.calls(), 1);
+});
+
+
+test('a transient projection reservation lock retries persistence without failing the photo or replaying recognition', async t => {
+  let reservations = 0, injected = 0;
+  const factory = async options => {
+    const execute = options.db.exec.bind(options.db);
+    options.db.exec = statement => {
+      if (statement === 'BEGIN IMMEDIATE' && reservations && --reservations === 0) { injected++; throw Object.assign(new Error('database is locked'), {errcode: 5}); }
+      return execute(statement);
+    };
+    return createIntakeServer(options);
+  };
+  const app = await setup(t, {busy: () => { reservations = 2; return {questions: [q('短暂锁后保存')]}; }}, factory);
+  const batch = await app.settle((await app.upload(['busy'])).id);
+  assert.equal(injected, 1); assert.equal(batch.state, 'completed'); assert.equal(batch.photos[0].state, 'completed');
+  assert.equal(batch.questions.length, 1); assert.equal(app.calls(), 1);
+});
+
+
+test('legacy synchronization uses accepted truncated fields and ignores an invalid cause status consistently', async t => {
+  const app = await setup(t, {legacy: {questions: [q('兼容旧题', {studentAnswer: '2', answerStatus: 'answered'})]}}, createNotebook);
+  const task = (await app.request('/api/import', 'POST', {name: 'legacy.png', base64: png('legacy').toString('base64')})).data;
+  for (let i = 0; i < 100 && (await app.request('/api/jobs/' + task.id)).data.state !== 'completed'; i++) await new Promise(r => setTimeout(r, 5));
+  const old = (await app.request('/api/questions?importId=' + task.id)).data[0];
+  await app.request('/api/questions/' + old.id, 'PATCH', {state: 'library', causeStatus: 'confirmed'});
+  const result = await app.request('/api/questions/' + old.id, 'PATCH', {studentAnswer: '长'.repeat(30001), possibleCause: '因'.repeat(30001), causeStatus: 'unsupported'});
+  assert.equal(result.status, 200);
+  const legacy = (await app.request('/api/questions?importId=' + task.id)).data[0];
+  const intake = (await app.request('/api/intake/questions/' + old.id)).data;
+  assert.equal(intake.attempts[0].studentAnswer, legacy.content.studentAnswer); assert.equal(intake.attempts[0].studentAnswer.length, 30000);
+  assert.equal(intake.attempts[0].possibleCause, legacy.content.possibleCause); assert.equal(intake.attempts[0].causeStatus, 'confirmed');
+});
