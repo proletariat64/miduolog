@@ -10,9 +10,10 @@ const teacherSchema = object({mark: choice(teacherMarks), score: text, comment: 
 const aiSchema = object({verdict: choice(['correct', 'incorrect', 'partial', 'uncertain']), reason: text});
 const bboxSchema = {anyOf: [object({x: {type: 'number'}, y: {type: 'number'}, width: {type: 'number'}, height: {type: 'number'}}), {type: 'null'}]};
 const answerFields = {number: text, studentAnswer: text, answerStatus: choice(['answered', 'unanswered', 'unclear']),
+  answerPresence: choice(['present', 'absent', 'unknown']), answerEvidence: text,
   teacherReview: teacherSchema, aiAssessment: aiSchema, matchKey: text, sourceLocation: text, bbox: bboxSchema};
 export const intakeRecognitionSchema = object({pageMarker: text,
-  paper: object({title: text, subject: text, grade: text, pageNumber: text, scope: choice(['full_page', 'partial_page', 'unknown'])}),
+  paper: object({title: text, documentId: text, subject: text, grade: text, pageNumber: text, scope: choice(['full_page', 'partial_page', 'unknown'])}),
   materials: {type: 'array', items: object({key: text, text, description: text})},
   questions: {type: 'array', items: object({...answerFields, subject: text, question: text, knowledgePoint: text, tags: strings,
     sharedMaterial: text, materialKeys: strings, diagramDescription: text, completeness: choice(['complete', 'partial', 'unclear']),
@@ -52,9 +53,47 @@ export function questionContent(value = {}) {
 }
 export function validateExtraction(value) {
   if (!value || !Array.isArray(value.questions) || value.questions.length > 150 || (value.answers !== undefined && (!Array.isArray(value.answers) || value.answers.length > 150))) throw new Error('识别题目列表无效');
-  for (const q of value.questions) { questionContent(q); teacher(q.teacherReview); assessment(q.aiAssessment); string(q.studentAnswer ?? ''); }
-  for (const a of value.answers || []) { teacher(a.teacherReview); assessment(a.aiAssessment); string(a.studentAnswer ?? ''); string(a.number ?? ''); }
+  for (const q of value.questions) { questionContent(q); validateAnswer(q); }
+  for (const a of value.answers || []) { validateAnswer(a); string(a.number ?? ''); }
   return value;
+}
+function validateAnswer(raw) {
+  teacher(raw.teacherReview); assessment(raw.aiAssessment); string(raw.studentAnswer ?? '');
+  enumValue(raw.answerPresence, ['present', 'absent', 'unknown'], 'unknown');
+  if (raw.answerEvidence !== undefined) string(raw.answerEvidence);
+}
+export function hasVisibleAnswer(raw) {
+  if (raw.studentAnswer?.trim()) return true;
+  if (raw.answerPresence === 'absent') return false;
+  if (raw.answerPresence === 'present' && raw.answerEvidence?.trim()) return true;
+  // Legacy drawing extractions explicitly said answered. Unclear alone says
+  // nothing about visible writing (the corresponding sheet may be elsewhere).
+  return raw.answerPresence === undefined && raw.answerStatus === 'answered';
+}
+const identityText = value => String(value || '').normalize('NFKC').replace(/\s+/gu, '').toUpperCase();
+const subjectNames = new Set(['数学', '语文', '英语', '物理', '化学', '生物', '历史', '地理', '政治', '其他']);
+function documentEvidence(extraction, raw) {
+  const paper = extraction?.paper || {}, documentId = identityText(paper.documentId);
+  const observed = [documentId, extraction?.pageMarker, raw.matchKey].filter(Boolean).join('|');
+  // This fallback supports already-saved extractions. New extractions explicitly
+  // transcribe documentId, so association no longer depends on model key order.
+  const visibleIds = [...new Set((observed.match(/[A-Za-z][A-Za-z0-9]*(?:[-_][A-Za-z0-9]+)+/gu) || []).map(identityText))];
+  if (documentId && !visibleIds.includes(documentId)) visibleIds.push(documentId);
+  const number = questionNumber(raw.number);
+  const keyTokens = [...new Set(String(raw.matchKey || '').split(/[|｜·]/u).map(identityText).filter(s => s && questionNumber(s) !== number && !subjectNames.has(s)))].sort();
+  return {ids: visibleIds, subject: identityText(paper.subject || raw.subject), title: identityText(paper.title).replace(/(?:题目页|答题纸|答题卡)$/u, ''), keyTokens};
+}
+export function questionNumber(value) {
+  const text = identityText(value);
+  const simple = text.match(/^(?:第)?[（(]?(\d+)[）)]?(?:题)?[.、．]?$/u);
+  return simple ? simple[1] : text;
+}
+export function sameVisibleDocument(leftExtraction, leftRaw, rightExtraction, rightRaw) {
+  const left = documentEvidence(leftExtraction, leftRaw), right = documentEvidence(rightExtraction, rightRaw);
+  if (left.subject && right.subject && left.subject !== right.subject) return false;
+  if (left.ids.length || right.ids.length) return left.ids.length === 1 && right.ids.length === 1 && left.ids[0] === right.ids[0];
+  if (left.title && right.title && left.subject && right.subject) return left.title === right.title && left.subject === right.subject;
+  return left.keyTokens.length > 0 && JSON.stringify(left.keyTokens) === JSON.stringify(right.keyTokens);
 }
 export function classification(q, pageUnclear = []) {
   const t = teacher(q.teacherReview), a = assessment(q.aiAssessment);

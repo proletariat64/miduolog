@@ -58,6 +58,7 @@ export class IntakeStore {
     if (!this.question(questionId, true)) throw new Error('题目不存在');
     const result = classification(raw), id = randomUUID();
     const data = {studentAnswer: string(raw.studentAnswer || ''), answerStatus: enumValue(raw.answerStatus, ['answered', 'unanswered', 'unclear'], raw.studentAnswer ? 'answered' : 'unclear'), teacherReview: teacher(raw.teacherReview), aiAssessment: assessment(raw.aiAssessment), status: result.status, statusReason: result.reason, statusSource: source,
+      answerPresence: enumValue(raw.answerPresence, ['present', 'absent', 'unknown'], raw.studentAnswer?.trim() || raw.answerStatus === 'answered' ? 'present' : 'unknown'), answerEvidence: string(raw.answerEvidence || ''),
       observedError: string(raw.observedError || ''), possibleCause: string(raw.possibleCause || ''), causeStatus: 'pending', unclear: raw.unclear || []};
     if (source === 'manual' && raw.status !== undefined) { data.status = enumValue(raw.status, statuses); data.statusReason = string(raw.statusReason || '手动录入原作答'); }
     this.db.prepare('INSERT INTO intake_attempts(id,questionId,data,sources,createdAt) VALUES (?,?,?,?,?)').run(id, questionId, encode(data), encode(sources), now());
