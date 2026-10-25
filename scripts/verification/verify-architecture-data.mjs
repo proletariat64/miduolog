@@ -54,6 +54,8 @@ try {
       // Compare a multiset of the original fields. This also covers compound
       // keys and permits a migration to add columns without losing old values.
       const columns = Object.keys(previous[0] || {});
+      const currentColumns = new Set(db.prepare('PRAGMA table_info(' + tableName(table) + ')').all().map(column => column.name));
+      for (const column of columns) assert.ok(currentColumns.has(column), table + ' original column missing: ' + column);
       const records = values => values.map(row => JSON.stringify(columns.map(key => row[key]))).sort();
       assert.deepEqual(records(current), records(previous), table + ' original records changed');
     }

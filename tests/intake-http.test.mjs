@@ -175,7 +175,8 @@ test('split, merge and removal retain sources, shared materials, original attemp
   assert.equal((await app.request('/api/intake/questions')).data.length, 0);
   assert.equal((await app.request('/api/intake/questions/' + merged.id)).data.removed, true);
   const historical = (await app.request('/api/review/sessions/' + session.id)).data;
-  assert.equal(historical.items[0].question.question, '第一问和第二问');
+  assert.equal(historical.items[0].question.question, session.items[0].question.question);
+  assert.match(historical.items[0].question.question, /共享题干/);
 });
 
 test('a partial batch retries failed inference only, preserves successful results and rejects conflicting upload retries', async t => {

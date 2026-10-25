@@ -3,5 +3,8 @@
 export class LegacyReviewCatalog {
   constructor(db) { this.db = db; }
   reviewQuestions() { return this.db.prepare("SELECT q.*,p.originalName FROM questions q JOIN imports p ON p.id=q.importId WHERE q.state='library'").all().map(q => ({...q, content: JSON.parse(q.content)})); }
-  reviewQuestion(id) { return this.reviewQuestions().find(q => q.id === id) || null; }
+  reviewQuestion(id) {
+    const q = this.db.prepare("SELECT q.*,p.originalName FROM questions q JOIN imports p ON p.id=q.importId WHERE q.id=? AND q.state='library'").get(id);
+    return q ? {...q, content: JSON.parse(q.content)} : null;
+  }
 }

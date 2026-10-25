@@ -28,10 +28,18 @@ export class IntakeService {
     this.matching = matching;
     if (!this.db.prepare('PRAGMA table_info(intake_photos)').all().some(c => c.name === 'reusedFrom')) this.db.exec('ALTER TABLE intake_photos ADD COLUMN reusedFrom TEXT');
     if (!this.db.prepare('PRAGMA table_info(intake_batches)').all().some(c => c.name === 'sealed')) this.db.exec('ALTER TABLE intake_batches ADD COLUMN sealed INTEGER NOT NULL DEFAULT 1');
+    if (!this.db.prepare('PRAGMA table_info(intake_batches)').all().some(c => c.name === 'manifest')) this.db.exec('ALTER TABLE intake_batches ADD COLUMN manifest TEXT');
     for (const p of this.db.prepare("SELECT * FROM intake_photos WHERE hash LIKE 'legacy:%'").all()) {
       try {
         const hash = digest(await readFile(resolve(this.imageDir, p.file)));
         if (!this.db.prepare('SELECT id FROM intake_photos WHERE hash=?').get(hash)) this.db.prepare('UPDATE intake_photos SET hash=? WHERE id=?').run(hash, p.id);
+      } catch (e) { if (e.code !== 'ENOENT') throw e; }
+    }
+    for (const photo of this.db.prepare('SELECT id,file,description FROM intake_photos WHERE description IS NOT NULL').all()) {
+      if (parse(photo.description)?.ink) continue;
+      try {
+        const description = await this.matching.describeImage(await readFile(resolve(this.imageDir, photo.file)));
+        this.db.prepare('UPDATE intake_photos SET description=? WHERE id=?').run(description ? encode(description) : null, photo.id);
       } catch (e) { if (e.code !== 'ENOENT') throw e; }
     }
     this.refresh();
@@ -58,7 +66,8 @@ export class IntakeService {
     const decisions = this.db.prepare('SELECT id FROM intake_decisions WHERE batchId=? ORDER BY rowid').all(id).map(r => this.decision(r.id));
     const fragments = this.db.prepare('SELECT id FROM intake_fragments WHERE batchId=? ORDER BY rowid').all(id).map(r => this.fragment(r.id));
     const warnings = fragments.filter(f => f.state === 'unlinked' && f.warning).map(f => ({type: 'answer_unlinked', fragmentId: f.id, photoId: f.photoId, message: f.warning}));
-    return {id, requestId: r.requestId, state: r.state, createdAt: r.createdAt, photos, decisions, fragments, warnings, questions: this.store.listQuestions({batchId: id})};
+    if (!r.sealed) warnings.unshift({type: 'upload_interrupted', message: '上传中断，请重新选择本批全部原照片继续' + (r.manifest ? '：' + parse(r.manifest).map(f => f.name).join('、') : '')});
+    return {id, requestId: r.requestId, expectedPhotos: (parse(r.manifest) || []).map(({name, size}) => ({name, size})), state: r.state, createdAt: r.createdAt, photos, decisions, fragments, warnings, questions: this.store.listQuestions({batchId: id})};
   }
   batches() { return this.db.prepare('SELECT id FROM intake_batches ORDER BY rowid DESC').all().map(r => this.batch(r.id)); }
   async submit(input) {
@@ -70,9 +79,11 @@ export class IntakeService {
       if (!type || bytes.length > 15 * 1024 * 1024) throw error('请使用15MB以下的PNG、JPEG或WebP图片');
       return {name: basename(name), bytes, type, hash: digest(bytes)};
     });
-    const inputHash = digest(files.map(f => ({name: f.name, hash: f.hash}))), previous = this.db.prepare('SELECT * FROM intake_batches WHERE requestId=?').get(requestId);
-    if (previous) { if (previous.inputHash !== inputHash) throw error('本次请求编号已用于不同照片', 409); return this.batch(previous.id); }
-    const id = randomUUID(); this.db.prepare('INSERT INTO intake_batches(id,requestId,inputHash,state,createdAt,sealed) VALUES (?,?,?,?,?,0)').run(id, requestId, inputHash, 'processing', now());
+    const inputHash = digest(files.map(f => ({name: f.name, hash: f.hash}))), previous = this.db.prepare('SELECT * FROM intake_batches WHERE requestId=?').get(requestId) || this.db.prepare('SELECT * FROM intake_batches WHERE inputHash=? AND sealed=0 ORDER BY rowid DESC LIMIT 1').get(inputHash);
+    if (previous && previous.inputHash !== inputHash) throw error('本次请求编号已用于不同照片', 409);
+    if (previous?.sealed && !this.batch(previous.id).photos.some(p => p.state === 'failed')) return this.batch(previous.id);
+    const id = previous?.id || randomUUID();
+    if (!previous) this.db.prepare('INSERT INTO intake_batches(id,requestId,inputHash,state,createdAt,sealed,manifest) VALUES (?,?,?,?,?,0,?)').run(id, requestId, inputHash, 'processing', now(), encode(files.map(f => ({name: f.name, hash: f.hash, size: f.bytes.length}))));
     for (let i = 0; i < files.length; i++) {
       const f = files[i]; let photo = this.db.prepare('SELECT * FROM intake_photos WHERE hash=?').get(f.hash), reused = !!photo;
       if (!photo) {
@@ -87,7 +98,18 @@ export class IntakeService {
           this.db.prepare('UPDATE intake_photos SET description=?,state=? WHERE id=?').run(description ? encode(description) : null, candidates.length ? 'attention' : 'queued', photo.id);
           if (candidates.length) this.addDecision(id, 'photo_similarity', {photoId: photo.id, candidates});
         } catch (e) { this.db.prepare("UPDATE intake_photos SET state='failed',error=? WHERE id=?").run('原图保存失败：' + e.message, photo.id); }
-      } else this.db.prepare('INSERT OR IGNORE INTO intake_batch_photos VALUES (?,?,?,?)').run(id, photo.id, i, Number(reused));
+      } else {
+        this.db.prepare('INSERT OR IGNORE INTO intake_batch_photos VALUES (?,?,?,?)').run(id, photo.id, i, Number(reused));
+        try {
+          await readFile(resolve(this.imageDir, photo.file));
+          if (previous && !previous.sealed && photo.state === 'failed') this.db.prepare("UPDATE intake_photos SET state=?,error=NULL WHERE id=?").run(photo.extraction ? 'completed' : 'queued', photo.id);
+        } catch {
+          try {
+            await writeImage(resolve(this.imageDir, photo.file), f.bytes);
+            this.db.prepare("UPDATE intake_photos SET state=?,error=NULL WHERE id=?").run(photo.extraction ? 'completed' : 'queued', photo.id);
+          } catch (e) { this.db.prepare("UPDATE intake_photos SET state='failed',error=? WHERE id=?").run('原图保存失败：' + e.message, photo.id); }
+        }
+      }
     }
     this.db.prepare('UPDATE intake_batches SET sealed=1 WHERE id=?').run(id);
     this.refresh(); this.schedule(); return this.batch(id);
@@ -119,17 +141,20 @@ export class IntakeService {
   }
   refresh() {
     // Pure persistence: no model calls occur while refreshing queryable projections.
-    this.store.transaction(() => {
-      for (const batch of this.db.prepare('SELECT id,sealed FROM intake_batches').all()) {
+    for (const batch of this.db.prepare('SELECT id,sealed FROM intake_batches').all()) {
         const photos = this.db.prepare('SELECT p.* FROM intake_photos p JOIN intake_batch_photos bp ON bp.photoId=p.id WHERE bp.batchId=? ORDER BY bp.position').all(batch.id);
-        for (const photo of photos) if (photo.state === 'completed' && photo.extraction) this.ingest(batch.id, photo.id, parse(photo.extraction));
-        const processing = !batch.sealed || !photos.length || photos.some(p => active.includes(p.state));
-        if (!processing) this.matchFragments(batch.id, photos);
+        for (const photo of photos) if (photo.state === 'completed' && photo.extraction) {
+          try { this.store.transaction(() => { const extraction = parse(photo.extraction); validateExtraction(extraction); this.ingest(batch.id, photo.id, extraction); }); }
+          catch (e) { photo.state = 'failed'; this.db.prepare("UPDATE intake_photos SET state='failed',error=? WHERE id=?").run('识别结果不可录入：' + e.message, photo.id); }
+        }
+        this.store.transaction(() => {
+        const processing = photos.some(p => active.includes(p.state));
+        if (!processing && batch.sealed) this.matchFragments(batch.id, photos);
         const attention = photos.some(p => p.state === 'attention') || this.db.prepare("SELECT id FROM intake_decisions WHERE batchId=? AND state='pending' LIMIT 1").get(batch.id) || this.db.prepare("SELECT id FROM intake_fragments WHERE batchId=? AND state='unlinked' LIMIT 1").get(batch.id);
-        const state = processing ? 'processing' : photos.some(p => p.state === 'failed') ? 'partial_failure' : attention ? 'attention' : 'completed';
+        const state = processing ? 'processing' : (!batch.sealed || photos.some(p => p.state === 'failed')) ? 'partial_failure' : attention ? 'attention' : 'completed';
         this.db.prepare('UPDATE intake_batches SET state=? WHERE id=?').run(state, batch.id);
-      }
-    });
+        });
+    }
   }
   ingest(batchId, photoId, extraction) {
     const materialMap = new Map();
@@ -159,7 +184,7 @@ export class IntakeService {
       }
       const candidates = this.matching.questionCandidates(this.matchingContent(content), this.store.listQuestions().map(q => ({id: q.id, content: this.matchingContent(q.content)})));
       let questionId = null, decisionId = null;
-      if (candidates.length) decisionId = this.addDecision(batchId, 'question_duplicate', {photoId, indexNo, question: {...raw, content}, source: sources[0], candidates});
+      if (candidates.length) decisionId = this.addDecision(batchId, 'question_duplicate', {photoId, indexNo, question: {...raw, unclear: [...(raw.unclear || []), ...(extraction.unclear || [])], content}, source: sources[0], candidates});
       else {
         questionId = this.store.addQuestion(content, sources);
         if (hasAnswer(raw)) this.store.addAttempt(questionId, {...raw, unclear: [...(raw.unclear || []), ...(extraction.unclear || [])]}, sources);
@@ -181,18 +206,20 @@ export class IntakeService {
     if (!questionNumber(fragment.number)) return [];
     for (const row of rows) {
       const photo = this.store.photo(row.photoId), raw = photo?.extraction?.questions[row.indexNo];
-      if (raw && questionNumber(raw.number) === questionNumber(fragment.number) && sameVisibleDocument(photo.extraction, raw, fragmentExtraction, fragment)) matches.add(row.questionId);
+      if (raw && questionNumber(raw.number) === questionNumber(fragment.number) && sameVisibleDocument(photo.extraction, raw, fragmentExtraction, fragment)) {
+        for (const id of this.store.lineageIds([row.questionId])) if (this.store.question(id)) matches.add(id);
+      }
     }
     return [...matches];
   }
   matchFragments(batchId, photos) {
     for (const row of this.db.prepare("SELECT * FROM intake_fragments WHERE batchId=? AND state='unlinked'").all(batchId)) {
       const raw = parse(row.data), matches = this.batchQuestionMatches(batchId, raw, row.photoId);
-      if (matches.length === 1) this.attachFragment(row, matches[0]);
+      const waiting = photos.some(p => ['attention','failed'].includes(p.state)) || this.db.prepare("SELECT id FROM intake_decisions WHERE batchId=? AND state='pending' LIMIT 1").get(batchId);
+      if (!waiting && matches.length === 1) this.attachFragment(row, matches[0]);
       else {
-        const waiting = photos.some(p => ['attention','failed'].includes(p.state)) || this.db.prepare("SELECT id FROM intake_decisions WHERE batchId=? AND state='pending' LIMIT 1").get(batchId);
         const warning = waiting ? '本批材料尚未全部可用，作答暂存，请先处理失败或重复项' : matches.length > 1 ? '本批有多个可能对应题目，请手动指定' : '本批缺少可明确对应的题干，未搜索历史，作答未录入';
-        const candidates = [...new Set(this.db.prepare('SELECT questionId FROM intake_occurrences WHERE batchId=? AND questionId IS NOT NULL').all(batchId).map(r => r.questionId))];
+        const candidates = this.store.listQuestions({batchId}).map(q => q.id);
         this.db.prepare('UPDATE intake_fragments SET data=? WHERE id=?').run(encode({...raw, warning, candidates}), row.id);
       }
     }
@@ -236,15 +263,20 @@ export class IntakeService {
   }
   linkFragment(id, input) {
     const row = this.db.prepare('SELECT * FROM intake_fragments WHERE id=?').get(id); if (!row) return null;
-    const occurrences = this.db.prepare('SELECT questionId FROM intake_occurrences WHERE batchId=? AND questionId=?').get(row.batchId, input.questionId);
+    const occurrences = this.store.listQuestions({batchId: row.batchId}).some(q => q.id === input.questionId);
     if (!occurrences) throw error('只能指定本次上传中已有的题目');
     if (row.state === 'linked') { if (row.questionId !== input.questionId) throw error('此作答已经关联', 409); return this.store.attempt(row.attemptId); }
     this.store.transaction(() => this.attachFragment(row, input.questionId)); this.refresh();
     return this.store.attempt(this.db.prepare('SELECT attemptId FROM intake_fragments WHERE id=?').get(id).attemptId);
   }
-  retry(id) {
+  async retry(id) {
     if (!this.batch(id)) return null;
-    this.db.prepare("UPDATE intake_photos SET state='queued',error=NULL WHERE id IN (SELECT photoId FROM intake_batch_photos WHERE batchId=?) AND state='failed'").run(id);
+    for (const photo of this.db.prepare("SELECT * FROM intake_photos WHERE id IN (SELECT photoId FROM intake_batch_photos WHERE batchId=?) AND state='failed'").all(id)) {
+      try {
+        await readFile(resolve(this.imageDir, photo.file));
+        this.db.prepare("UPDATE intake_photos SET state='queued',error=NULL WHERE id=?").run(photo.id);
+      } catch { this.db.prepare("UPDATE intake_photos SET error='原图缺失，请重新选择原照片上传' WHERE id=?").run(photo.id); }
+    }
     this.refresh(); this.schedule(); return this.batch(id);
   }
   createQuestion(input) {
@@ -301,15 +333,25 @@ export class IntakeService {
     this.store.migrateLegacy();
     return this.store.listQuestions().filter(q => q.verified).map(q => this.reviewQuestion(q.id));
   }
-  syncLegacyQuestion(id) {
+  syncLegacyQuestion(id, input = {}) {
     this.store.migrateLegacy();
     const row = this.db.prepare('SELECT * FROM questions WHERE id=?').get(id);
-    if (row) this.store.updateQuestion(id, {content: parse(row.content), verified: row.state === 'library'});
+    if (!row) return;
+    const content = Object.fromEntries(['question', 'subject', 'knowledgePoint'].filter(k => typeof input[k] === 'string').map(k => [k, input[k]]));
+    if (Object.keys(content).length || input.state === 'library') this.store.updateQuestion(id, {content, ...(input.state === 'library' ? {verified: true} : {})});
+    const fields = ['studentAnswer', 'observedError', 'possibleCause', 'causeStatus'];
+    const patch = Object.fromEntries(fields.filter(k => typeof input[k] === 'string').map(k => [k, input[k]]));
+    if (!Object.keys(patch).length) return;
+    const question = this.store.question(id), attempt = question?.attempts.find(a => a.history.some(h => h.source === 'legacy'));
+    if (attempt) this.store.updateAttempt(attempt.id, patch);
+    else if (patch.studentAnswer?.trim()) this.store.addAttempt(id, {...parse(row.content), ...patch}, question.sources, 'legacy');
   }
   reviewQuestion(id) {
     const q = this.store.question(id); if (!q || !q.verified) return null;
     const latest = q.attempts.at(-1);
-    return {id: q.id, state: 'library', importId: q.sources[0]?.photoId || '', originalName: this.store.photo(q.sources[0]?.photoId)?.name || '', content: {...q.content, studentAnswer: latest?.studentAnswer || '', observedError: latest?.observedError || '', possibleCause: latest?.possibleCause || '', causeStatus: latest?.causeStatus || 'pending'}};
+    const material = [q.content.sharedMaterial, ...q.materials.map(m => [m.text, m.description].filter(Boolean).join('\n'))].filter(Boolean).join('\n\n');
+    const question = material ? '共用材料：\n' + material + '\n\n题目：\n' + q.content.question : q.content.question;
+    return {id: q.id, state: 'library', importId: q.sources[0]?.photoId || '', originalName: this.store.photo(q.sources[0]?.photoId)?.name || '', content: {...q.content, question, studentAnswer: latest?.studentAnswer || '', observedError: latest?.observedError || '', possibleCause: latest?.possibleCause || '', causeStatus: latest?.causeStatus || 'pending'}};
   }
   async idle() { while (this.runner) await this.runner; }
   async close() { this.closed = true; await this.idle(); }

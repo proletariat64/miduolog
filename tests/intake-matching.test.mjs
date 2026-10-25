@@ -109,3 +109,13 @@ test('spaces separating English words or numbers are not erased into another pro
   assert.notEqual(questionCandidates(spaced, [{id: 'joined', content: joined}])[0]?.kind, 'exact');
   assert.deepEqual(questionCandidates({subject: '数学', question: '排列这些数：1 2 3'}, [{id: 'joined', content: {subject: '数学', question: '排列这些数：123'}}]), []);
 });
+
+
+test('printed pages with a common layout but different question or answer content do not block intake', async () => {
+  const page = async rows => sharp(Buffer.from('<svg width="1400" height="1100"><rect width="100%" height="100%" fill="white"/>' + rows.map((text, i) => '<text x="60" y="' + (100 + i * 80) + '" font-family="Arial" font-size="32">' + text + '</text>').join('') + '</svg>')).png().toBuffer();
+  const original = await page(['Math Practice B / MIDO-97531 / Questions', '1. Calculate: 9 + 4 = ( ).', '2. Calculate: 10 - 6 = ( ).', 'Questions only. Answers are on a separate sheet.']);
+  const different = await page(['Math Practice C / MIDO-13579 / Answer Sheet', '1. Student answer: A', '2. Student answer: B', 'Answers only. No questions are shown.']);
+  const description = await describeImage(original);
+  assert.deepEqual(photoCandidates(await describeImage(different), [{id: 'different-content', ...description}]), []);
+  for (const encoded of [await sharp(original).resize(700).jpeg({quality: 70}).toBuffer(), await sharp(original).resize(1800).webp({quality: 65}).toBuffer()]) assert.equal(photoCandidates(await describeImage(encoded), [{id: 'same', ...description}])[0]?.id, 'same');
+});

@@ -75,3 +75,13 @@ test('snapshot refuses active intake work and also supports a standalone intake 
   assert.ok(JSON.parse(snapshot.stdout).backupPath);
   assert.match((await run(process.execPath, [script], {cwd, timeout: 10000})).stdout, /PASS/);
 });
+
+
+test('upgrade preservation detects removal of an original all-null column', async t => {
+  let db; t.after(() => db?.close()); const cwd = await testDirectory(t);
+  await mkdir(join(cwd, 'data'), {recursive: true}); db = new DatabaseSync(join(cwd, 'data/notebook.sqlite'));
+  db.exec("CREATE TABLE preserved(id TEXT,nullable TEXT); INSERT INTO preserved VALUES ('one',NULL)");
+  await run(process.execPath, [script, '--snapshot'], {cwd, timeout: 10000});
+  db.exec('ALTER TABLE preserved DROP COLUMN nullable');
+  await assert.rejects(run(process.execPath, [script], {cwd, timeout: 10000}), /nullable/);
+});
