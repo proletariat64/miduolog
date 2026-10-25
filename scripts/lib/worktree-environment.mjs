@@ -48,8 +48,9 @@ export async function readEnvironment(root) {
   }
 }
 
-export async function localServiceUrl(root, override = process.env.MIDO_URL) {
+export async function localServiceUrl(root, override = process.env.MIDO_URL, portOverride = process.env.MIDO_PORT) {
   if (override) return override;
+  if (portOverride) return `http://127.0.0.1:${validPort(portOverride)}`;
   const config = await readEnvironment(root);
   return `http://127.0.0.1:${config?.port ?? 4318}`;
 }

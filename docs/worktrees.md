@@ -57,7 +57,7 @@ worktree 不复制或链接其他 checkout 的数据库、试卷、node_modules�
 npm run verify:codex
 ```
 
-最后一条命令会调用真实模型。单张导入、批量导入和存储核对默认读取当前 worktree 的开发地址；没有本地环境配置时才使用默认端口。MIDO_URL 可显式覆盖目标地址。按[维护工具说明](development.md)从 worktree 根目录运行，避免把另一个实例当成目标。
+最后一条命令会调用真实模型。单张导入、批量导入和存储核对按 MIDO_URL、MIDO_PORT、本地环境配置、默认端口的优先级确定目标，临时端口覆盖与开发服务器保持一致。按[维护工具说明](development.md)从 worktree 根目录运行，避免把另一个实例当成目标。
 
 ## 验证初始化本身
 

@@ -46,10 +46,12 @@ test('automatic selection advances past busy ports', async t => {
 
 test('maintenance commands follow the worktree port and support explicit overrides', async t => {
   const root = await testDirectory(t);
-  assert.equal(await localServiceUrl(root, ''), 'http://127.0.0.1:4318');
+  assert.equal(await localServiceUrl(root, '', ''), 'http://127.0.0.1:4318');
   await prepareEnvironment(root, {port: 4325, available: async () => true});
-  assert.equal(await localServiceUrl(root, ''), 'http://127.0.0.1:4325');
-  assert.equal(await localServiceUrl(root, 'http://127.0.0.1:4330'), 'http://127.0.0.1:4330');
+  assert.equal(await localServiceUrl(root, '', ''), 'http://127.0.0.1:4325');
+  assert.equal(await localServiceUrl(root, '', '4335'), 'http://127.0.0.1:4335');
+  assert.equal(await localServiceUrl(root, 'http://127.0.0.1:4330', '4335'), 'http://127.0.0.1:4330');
+  await assert.rejects(localServiceUrl(root, '', 'invalid'), /端口必须/);
 });
 
 test('setup refuses linked data directories instead of sharing another checkout', async t => {
