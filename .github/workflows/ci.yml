@@ -28,4 +28,6 @@ jobs:
         run: npm run docs:check
       - name: Tests
         run: npm test
+      - name: Fresh worktree bootstrap
+        run: npm run verify:worktree
       - run: git diff --check

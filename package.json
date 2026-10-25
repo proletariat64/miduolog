@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "bootstrap": "node scripts/operations/bootstrap-worktree.mjs",
+    "dev": "node scripts/operations/start-dev.mjs",
+    "verify:worktree": "node scripts/verification/verify-worktree-bootstrap.mjs",
     "start": "node app/server.mjs",
     "test": "node --test tests/*.test.mjs",
     "verify:codex": "node scripts/verification/verify-codex.mjs",

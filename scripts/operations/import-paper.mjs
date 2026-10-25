@@ -1,7 +1,8 @@
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {basename,resolve} from 'node:path';
+import {localServiceUrl} from '../lib/worktree-environment.mjs';
 const filename=process.argv[2];if(!filename)throw new Error('请提供试卷图片路径');
-const base='http://127.0.0.1:4318';
+const base=await localServiceUrl(resolve('.'));
 const bytes=await readFile(filename);
 const response=await fetch(base+'/api/import',{method:'POST',headers:{'Content-Type':'application/json','X-Mido-Client':'desktop'},body:JSON.stringify({name:basename(filename),base64:bytes.toString('base64')})});
 const job=await response.json();if(!response.ok)throw new Error(job.error);

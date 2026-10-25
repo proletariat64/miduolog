@@ -2,7 +2,7 @@
 
 1. 在 `codex/` 分支明确本次需求，先查代码图谱，再核对源码和测试。
 2. 修改实现，为数据、并发、恢复问题补针对性的回归测试。
-3. 首次使用运行 `npm ci`；提交前运行 `npm run check` 和 `git diff --check`。前者包含 ESLint、doc guard 与隔离测试，不调用真实模型。
+3. 新 worktree 按[初始化流程](worktrees.md)运行 `npm run bootstrap`；提交前运行 `npm run check` 和 `git diff --check`。前者包含 ESLint、doc guard 与隔离测试，不调用真实模型。
 4. 运行 `ocr review --background-file docs/architecture.md --format json --output .scratch/local-ci/ocr-review.json`。源码发送授权见根目录 `AGENTS.md`；按源码验证发现，修复后复查。OCR 结果与测试结果分别报告，命令成功不表示没有问题。
 5. 暂存并核对本次源码变更，确保本地数据库、试卷、凭据与运行生成物保持被忽略，然后提交、推送并创建 PR。
 6. PR 描述说明问题、最终行为、测试证据和迁移风险。Windows、Linux 的 GitHub Actions 检查通过并处理审查意见后，再合并。
