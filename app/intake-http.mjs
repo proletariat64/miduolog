@@ -1,22 +1,40 @@
 import http from 'node:http';
+import {receiveIntakeUpload} from './intake-upload.mjs';
 import {IntakeService} from './intake-service.mjs';
 
 export function intakeJson(res, status, data) { res.writeHead(status, {'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store'}); res.end(JSON.stringify(data)); }
-export async function intakeBody(req) {
+export async function intakeBody(req, maximum = 1024 * 1024) {
   let size = 0; const chunks = [];
-  for await (const chunk of req) { size += chunk.length; if (size > 640 * 1024 * 1024) throw Object.assign(new Error('上传批次过大'), {status: 413}); chunks.push(chunk); }
+  for await (const chunk of req.iterator({destroyOnReturn: false})) { size += chunk.length; if (size > maximum) { req.resume(); throw Object.assign(new Error('上传批次过大'), {status: 413}); } chunks.push(chunk); }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw Object.assign(new Error('请求不是有效 JSON'), {status: 400}); }
 }
 export function createIntakeHandler(intake) {
+  let uploading = false; const waiting = [];
   return async function handle(req, res, url) {
     if (!url.pathname.startsWith('/api/intake/')) return false;
-    const path = url.pathname, json = data => intakeJson(res, data == null ? 404 : 200, data == null ? {error: '记录不存在'} : data);
+    const path = url.pathname, json = data => { const missing = data === null || data === undefined; return intakeJson(res, missing ? 404 : 200, missing ? {error: '记录不存在'} : data); };
     try {
       const match = path.match(/^\/api\/intake\/(batches|photos|decisions|fragments|questions|attempts|materials)(?:\/([^/]+))?(?:\/(retry|image|link|split|merge|attempts))?$/);
       if (!match) { intakeJson(res, 404, {error: '接口不存在'}); return true; }
       const [, resource, id, action] = match, method = req.method;
       if (resource === 'batches') {
-        if (method === 'POST' && !id) { intakeJson(res, 202, await intake.submit(await intakeBody(req))); return true; }
+        if (method === 'POST' && !id) {
+          if (uploading) {
+            if (waiting.length >= 2) { req.resume(); intakeJson(res, 429, {error: '正在保存其他照片，请稍后重试本批'}); return true; }
+            await new Promise(resolve => waiting.push(resolve));
+          }
+          uploading = true; let staged;
+          try {
+            if (req.aborted) throw new Error('上传已中断');
+            const multipart = /^multipart\/form-data(?:;|$)/i.test(req.headers['content-type'] || '');
+            if (multipart) staged = await receiveIntakeUpload(req, intake.dataDir);
+            const input = staged ? staged.input : await intakeBody(req, 24 * 1024 * 1024);
+            const batch = await intake.submit(input, {staged: !!staged});
+            if (staged) { await staged.cleanup(); staged = null; }
+            intakeJson(res, 202, batch);
+          } finally { try { if (staged) await staged.cleanup(); } finally { const next = waiting.shift(); if (next) next(); else uploading = false; } }
+          return true;
+        }
         if (method === 'GET' && !action) { json(id ? intake.batch(id) : intake.batches()); return true; }
         if (method === 'POST' && action === 'retry') { json(await intake.retry(id)); return true; }
       }
@@ -31,7 +49,7 @@ export function createIntakeHandler(intake) {
       if (resource === 'questions') {
         if (method === 'GET' && !action) { json(id ? intake.store.question(id, true) : intake.store.listQuestions({status: url.searchParams.get('status'), tag: url.searchParams.get('tag'), batchId: url.searchParams.get('batchId'), includeRemoved: url.searchParams.get('includeRemoved') === '1'})); return true; }
         if (method === 'POST' && !id) { json(intake.createQuestion(await intakeBody(req))); return true; }
-        if (method === 'POST' && action === 'split') { json(intake.split(id, await intakeBody(req))); return true; }
+        if (method === 'POST' && action === 'split') { json(intake.split(id, await intakeBody(req, 24 * 1024 * 1024))); return true; }
         if (method === 'POST' && action === 'merge') { json(intake.merge(id, await intakeBody(req))); return true; }
         if (method === 'POST' && action === 'attempts') { json(intake.appendAttempt(id, await intakeBody(req))); return true; }
         if (method === 'PATCH' && id && !action) { json(intake.store.updateQuestion(id, await intakeBody(req))); return true; }

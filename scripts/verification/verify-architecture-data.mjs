@@ -36,6 +36,7 @@ try {
     const intake = activeCount('intake_photos', ['saving', 'queued', 'processing']) + activeCount('intake_batches', ['processing']);
     if (imports || reviews || intake) throw new Error('仍有处理中的导入、录入或批阅，请完成后再切换版本');
     const rows = Object.fromEntries(tables.map(table => [table, rowsOf(db, table)]));
+    const columns = Object.fromEntries(tables.map(table => [table, db.prepare('PRAGMA table_info(' + tableName(table) + ')').all().map(column => column.name)]));
     const backupDir = resolve('data/backups'); await mkdir(backupDir, {recursive: true});
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
     const backupPath = join(backupDir, 'before-architecture-' + stamp + '.sqlite');
@@ -44,7 +45,7 @@ try {
     for (const table of tables) assert.equal(rowsOf(check, table).length, rows[table].length, table + ' backup row count changed');
     check.close();
     await mkdir(reportDir, {recursive: true});
-    await writeFile(reportPath, JSON.stringify({createdAt: new Date().toISOString(), backupPath, rows, images: await imageDigests()}, null, 2), 'utf8');
+    await writeFile(reportPath, JSON.stringify({createdAt: new Date().toISOString(), backupPath, rows, columns, images: await imageDigests()}, null, 2), 'utf8');
     console.log(JSON.stringify({backupPath, counts: Object.fromEntries(tables.map(t => [t, rows[t].length]))}));
   } else {
     const baseline = JSON.parse(await readFile(reportPath, 'utf8'));
@@ -53,7 +54,7 @@ try {
       assert.equal(current.length, previous.length, table + ' row count changed');
       // Compare a multiset of the original fields. This also covers compound
       // keys and permits a migration to add columns without losing old values.
-      const columns = Object.keys(previous[0] || {});
+      const columns = baseline.columns?.[table] || Object.keys(previous[0] || {});
       const currentColumns = new Set(db.prepare('PRAGMA table_info(' + tableName(table) + ')').all().map(column => column.name));
       for (const column of columns) assert.ok(currentColumns.has(column), table + ' original column missing: ' + column);
       const records = values => values.map(row => JSON.stringify(columns.map(key => row[key]))).sort();

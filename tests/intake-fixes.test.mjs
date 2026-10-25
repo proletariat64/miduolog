@@ -26,7 +26,7 @@ async function setup(t, responses = {}, factory = createIntakeServer) {
   await open();
   const request = async (route, method = 'GET', body) => {
     const response = await fetch('http://127.0.0.1:' + app.server.address().port + route, {method,
-      headers: {'Content-Type': 'application/json', 'X-Mido-Client': 'desktop'}, ...(body ? {body: JSON.stringify(body)} : {})});
+      headers: {...(body instanceof FormData ? {} : {'Content-Type': 'application/json'}), 'X-Mido-Client': 'desktop'}, ...(body ? {body: body instanceof FormData ? body : JSON.stringify(body)} : {})});
     return {status: response.status, data: await response.json()};
   };
   const upload = async (labels, requestId = crypto.randomUUID()) => (await request('/api/intake/batches', 'POST', {requestId, files: labels.map(label => ({name: label + '.png', base64: png(label).toString('base64')}))})).data;
@@ -38,7 +38,7 @@ async function setup(t, responses = {}, factory = createIntakeServer) {
     }
     throw new Error('batch did not settle');
   };
-  return {request, upload, settle, responses, prompts, dataDir, databasePath: path, calls: () => calls, reopen: async () => { await app.close(); db.close(); await open(); }};
+  return {origin: () => 'http://127.0.0.1:' + app.server.address().port, request, upload, settle, responses, prompts, dataDir, databasePath: path, calls: () => calls, reopen: async () => { await app.close(); db.close(); await open(); }};
 }
 
 
@@ -235,4 +235,118 @@ test('legacy synchronization uses accepted truncated fields and ignores an inval
   const intake = (await app.request('/api/intake/questions/' + old.id)).data;
   assert.equal(intake.attempts[0].studentAnswer, legacy.content.studentAnswer); assert.equal(intake.attempts[0].studentAnswer.length, 30000);
   assert.equal(intake.attempts[0].possibleCause, legacy.content.possibleCause); assert.equal(intake.attempts[0].causeStatus, 'confirmed');
+});
+
+
+test('completed request resubmission repairs deleted source bytes and preserves inference', async t => {
+  const app = await setup(t), requestId = crypto.randomUUID(), batch = await app.settle((await app.upload(['restore'], requestId)).id);
+  const seed = new DatabaseSync(app.databasePath); const file = seed.prepare('SELECT file FROM intake_photos WHERE id=?').get(batch.photos[0].id).file; seed.close();
+  await unlink(join(app.dataDir, 'images', file));
+  assert.equal((await app.upload(['restore'], requestId)).id, batch.id);
+  assert.deepEqual(await readFile(join(app.dataDir, 'images', file)), png('restore')); assert.equal(app.calls(), 1);
+});
+
+test('blank answer-sheet regions do not create attempts or warnings while visible drawings are retained', async t => {
+  const responses = {sheet: {paper, questions: [], answers: [{...answer, studentAnswer: '', answerPresence: 'absent'}, {...answer, number: '2', studentAnswer: '', answerStatus: 'unclear', answerPresence: 'unknown'}, {...answer, number: '3', studentAnswer: '', answerStatus: 'unclear', answerPresence: 'present', answerEvidence: '孩子画了三角形'}]}, questions: {paper, questions: [q('甲', {number: '1'}), q('乙', {number: '2'}), q('丙', {number: '3'})]}};
+  const app = await setup(t, responses), batch = await app.settle((await app.upload(['questions', 'sheet'])).id);
+  assert.equal(batch.fragments.length, 1); assert.equal(batch.fragments[0].number, '3'); assert.equal(batch.fragments[0].state, 'linked'); assert.equal(batch.warnings.length, 0);
+  assert.equal(batch.questions.find(q => q.content.number === '1').attempts.length, 0);
+  assert.equal(batch.questions.find(q => q.content.number === '3').attempts.length, 1);
+});
+
+test('split moves the linked answer fragment with its original attempt and remains idempotently linkable', async t => {
+  const app = await setup(t, {whole: {paper, questions: [q('拆分父题')]}, sheet: {paper, questions: [], answers: [answer]}});
+  const batch = await app.settle((await app.upload(['whole', 'sheet'])).id), original = batch.questions[0], attempt = original.attempts[0];
+  const children = (await app.request('/api/intake/questions/' + original.id + '/split', 'POST', {requestId: crypto.randomUUID(), parts: [{content: {question: '甲'}, attemptIds: [attempt.id]}, {content: {question: '乙'}}]})).data;
+  const next = (await app.request('/api/intake/batches/' + batch.id)).data;
+  assert.equal(next.fragments[0].questionId, children[0].id);
+  const link = await app.request('/api/intake/fragments/' + next.fragments[0].id + '/link', 'POST', {questionId: children[0].id});
+  assert.equal(link.status, 200); assert.equal(link.data.id, attempt.id);
+});
+
+
+test('legacy edits update removed records safely and rollback both catalogs when synchronization fails', async t => {
+  const app = await setup(t, {legacy: {questions: [q('旧题无作答')]}}, createNotebook);
+  const task = (await app.request('/api/import', 'POST', {name: 'legacy.png', base64: png('legacy').toString('base64')})).data;
+  for (let i = 0; i < 100 && (await app.request('/api/jobs/' + task.id)).data.state !== 'completed'; i++) await new Promise(r => setTimeout(r, 5));
+  const old = (await app.request('/api/questions?importId=' + task.id)).data[0];
+  await app.reopen(); await app.request('/api/intake/questions/' + old.id, 'DELETE');
+  assert.equal((await app.request('/api/questions/' + old.id, 'PATCH', {studentAnswer: '安全补原作答'})).status, 200);
+  assert.equal((await app.request('/api/intake/questions/' + old.id)).data.removed, true);
+  const seed = new DatabaseSync(app.databasePath); seed.exec("CREATE TRIGGER reject_legacy_sync BEFORE UPDATE ON intake_attempts BEGIN SELECT RAISE(ABORT,'injected sync failure'); END"); seed.close();
+  assert.equal((await app.request('/api/questions/' + old.id, 'PATCH', {question: '不该部分提交', studentAnswer: '同步失败'})).status, 500);
+  assert.equal((await app.request('/api/questions?importId=' + task.id)).data[0].content.question, '旧题无作答');
+  const current = (await app.request('/api/intake/questions/' + old.id)).data;
+  assert.equal(current.content.question, '旧题无作答'); assert.equal(current.attempts[0].studentAnswer, '安全补原作答');
+});
+
+test('legacy creation history preserves recorded status without inventing ever-wrong evidence', async t => {
+  const app = await setup(t, {legacy: {questions: [q('旧状态题', {studentAnswer: '3', answerStatus: 'answered', teacherReview: {mark: 'incorrect', evidence: '红叉'}})]}}, createNotebook);
+  const task = (await app.request('/api/import', 'POST', {name: 'legacy.png', base64: png('legacy').toString('base64')})).data;
+  for (let i = 0; i < 100 && (await app.request('/api/jobs/' + task.id)).data.state !== 'completed'; i++) await new Promise(r => setTimeout(r, 5));
+  const old = (await app.request('/api/questions?importId=' + task.id)).data[0], seed = new DatabaseSync(app.databasePath);
+  seed.prepare('UPDATE questions SET content=? WHERE id=?').run(JSON.stringify({...old.content, questionStatus: 'correct'}), old.id); seed.close();
+  await app.reopen(); const current = (await app.request('/api/intake/questions/' + old.id)).data;
+  assert.equal(current.latestStatus, 'correct'); assert.equal(current.everWrong, false); assert.equal(current.attempts[0].history[0].after.status, 'correct');
+});
+
+
+test('multipart intake accepts thirty file-backed photos beyond the JSON aggregate cap and cleans staging files', async t => {
+  const app = await setup(t), form = new FormData(); form.append('requestId', crypto.randomUUID());
+  const bytes = Buffer.concat([png('streamed'), Buffer.alloc(900000)]);
+  for (let i = 0; i < 30; i++) form.append('photos', new Blob([bytes], {type: 'image/png'}), 'page-' + i + '.png');
+  const response = await app.request('/api/intake/batches', 'POST', form);
+  assert.equal(response.status, 202, JSON.stringify(response.data)); const batch = await app.settle(response.data.id);
+  assert.equal(batch.expectedPhotos.length, 30); assert.equal(batch.questions.length, 1); assert.equal(app.calls(), 1);
+  const {readdir} = await import('node:fs/promises'); assert.equal((await readdir(app.dataDir)).some(name => name.startsWith('upload-')), false);
+});
+
+
+test('multipart limits reject oversized or excessive files, clean staging, and ordinary edits have a small body bound', async t => {
+  const app = await setup(t), form = new FormData(); form.append('requestId', crypto.randomUUID());
+  form.append('photos', new Blob([png('too-large'), Buffer.alloc(15 * 1024 * 1024)], {type: 'image/png'}), 'large.png');
+  assert.equal((await app.request('/api/intake/batches', 'POST', form)).status, 413);
+  const many = new FormData(); many.append('requestId', crypto.randomUUID());
+  for (let i = 0; i < 31; i++) many.append('photos', new Blob([png('tiny')]), i + '.png');
+  assert.equal((await app.request('/api/intake/batches', 'POST', many)).status, 413);
+  assert.equal((await app.request('/api/intake/questions', 'POST', {requestId: crypto.randomUUID(), content: {question: 'x'.repeat(1024 * 1024)}})).status, 413);
+  const {readdir} = await import('node:fs/promises'); assert.equal((await readdir(app.dataDir)).some(name => name.startsWith('upload-')), false); assert.equal(app.calls(), 0);
+});
+
+test('multipart original-save errors release admission and a later valid upload still succeeds', async t => {
+  const app = await setup(t), form = new FormData(); form.append('requestId', crypto.randomUUID()); form.append('photos', new Blob([png('staging')]), 'source.png');
+  const directory = join(app.dataDir, 'images'); await rename(directory, join(app.dataDir, 'saved-images')); await writeFile(directory, 'not-a-directory');
+  assert.equal((await app.request('/api/intake/batches', 'POST', form)).status, 202);
+  await unlink(directory); await rename(join(app.dataDir, 'saved-images'), directory);
+  const retry = new FormData(); retry.append('requestId', crypto.randomUUID()); retry.append('photos', new Blob([png('staging')]), 'source.png');
+  const batch = await app.settle((await app.request('/api/intake/batches', 'POST', retry)).data.id);
+  assert.equal(batch.state, 'completed'); assert.equal(app.calls(), 1);
+});
+
+
+test('malformed multipart releases staged files and bounded admission queues concurrent uploads', async t => {
+  const app = await setup(t), {readdir} = await import('node:fs/promises');
+  const malformed = await fetch(app.origin() + '/api/intake/batches', {method: 'POST', headers: {'X-Mido-Client': 'desktop', 'Content-Type': 'multipart/form-data; boundary=broken'}, body: '--broken\r\nContent-Disposition: form-data; name="photos"; filename="bad.png"\r\n\r\nunclosed'});
+  assert.equal(malformed.status, 400); assert.equal((await readdir(app.dataDir)).some(name => name.startsWith('upload-')), false);
+  const http = await import('node:http'); let first;
+  const response = new Promise((resolve, reject) => {
+    first = http.request(app.origin() + '/api/intake/batches', {method: 'POST', headers: {'X-Mido-Client': 'desktop', 'Content-Type': 'multipart/form-data; boundary=hold'}}, res => { const chunks = []; res.on('data', b => chunks.push(b)); res.on('end', () => resolve({status: res.statusCode, data: JSON.parse(Buffer.concat(chunks))})); });
+    first.on('error', reject);
+  });
+  t.after(() => first.destroy());
+  first.write('--hold\r\nContent-Disposition: form-data; name="requestId"\r\n\r\nheld\r\n--hold\r\nContent-Disposition: form-data; name="photos"; filename="held.png"\r\nContent-Type: image/png\r\n\r\n'); first.write(png('held'));
+  for (let i = 0; i < 100 && !(await readdir(app.dataDir)).some(name => name.startsWith('upload-')); i++) await new Promise(r => setTimeout(r, 5));
+  const pending = ['queued-a', 'queued-b', 'overflow'].map(label => app.request('/api/intake/batches', 'POST', {requestId: label, files: [{name: label + '.png', base64: png(label).toString('base64')}]}));
+  assert.equal((await Promise.race(pending)).status, 429);
+  first.end('\r\n--hold--\r\n'); assert.equal((await response).status, 202);
+  assert.deepEqual((await Promise.all(pending)).map(r => r.status).sort(), [202, 202, 429]);
+  assert.equal((await readdir(app.dataDir)).some(name => name.startsWith('upload-')), false);
+});
+
+
+test('multipart retains the full fifteen MiB per-photo allowance', async t => {
+  const app = await setup(t), bytes = Buffer.alloc(15 * 1024 * 1024); png('maximum').copy(bytes);
+  const form = new FormData(); form.append('requestId', crypto.randomUUID()); form.append('photos', new Blob([bytes], {type: 'image/png'}), 'maximum.png');
+  const response = await app.request('/api/intake/batches', 'POST', form); assert.equal(response.status, 202);
+  assert.equal((await app.settle(response.data.id)).state, 'completed'); assert.equal(app.calls(), 1);
 });

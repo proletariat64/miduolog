@@ -71,31 +71,32 @@ export class IntakeService {
     return {id, requestId: r.requestId, expectedPhotos: (parse(r.manifest) || []).map(({name, size}) => ({name, size})), state: r.state, createdAt: r.createdAt, photos, decisions, fragments, warnings, questions: this.store.listQuestions({batchId: id})};
   }
   batches() { return this.db.prepare('SELECT id FROM intake_batches ORDER BY rowid DESC').all().map(r => this.batch(r.id)); }
-  async submit(input) {
+  async submit(input, {staged = false} = {}) {
     const requestId = string(input.requestId, 200); if (!requestId.trim()) throw error('缺少请求编号');
     if (!Array.isArray(input.files) || !input.files.length || input.files.length > 30) throw error('请选择1至30张照片');
     const files = input.files.map(f => {
-      const name = string(f.name, 1000); if (typeof f.base64 !== 'string') throw error('缺少图片');
+      const name = string(f.name, 1000);
+      if (staged) { if (!f.type || !Number.isSafeInteger(f.size) || f.size < 1 || f.size > 15 * 1024 * 1024) throw error('请使用15MB以下的PNG、JPEG或WebP图片'); return {...f, name: basename(name)}; }
+      if (typeof f.base64 !== 'string') throw error('缺少图片');
       const bytes = Buffer.from(f.base64, 'base64'), type = imageType(bytes);
       if (!type || bytes.length > 15 * 1024 * 1024) throw error('请使用15MB以下的PNG、JPEG或WebP图片');
-      return {name: basename(name), bytes, type, hash: digest(bytes)};
+      return {name: basename(name), bytes, size: bytes.length, type, hash: digest(bytes)};
     });
     const inputHash = digest(files.map(f => ({name: f.name, hash: f.hash}))), previous = this.db.prepare('SELECT * FROM intake_batches WHERE requestId=? OR id=(SELECT batchId FROM intake_requests WHERE requestId=?) LIMIT 1').get(requestId, requestId) || this.db.prepare('SELECT * FROM intake_batches WHERE inputHash=? AND sealed=0 ORDER BY rowid DESC LIMIT 1').get(inputHash);
     if (previous && previous.inputHash !== inputHash) throw error('本次请求编号已用于不同照片', 409);
     if (previous) this.db.prepare('INSERT OR IGNORE INTO intake_requests VALUES (?,?)').run(requestId, previous.id);
-    if (previous?.sealed && !this.batch(previous.id).photos.some(p => p.state === 'failed')) return this.batch(previous.id);
     const id = previous?.id || randomUUID();
-    if (!previous) this.db.prepare('INSERT INTO intake_batches(id,requestId,inputHash,state,createdAt,sealed,manifest) VALUES (?,?,?,?,?,0,?)').run(id, requestId, inputHash, 'processing', now(), encode(files.map(f => ({name: f.name, hash: f.hash, size: f.bytes.length}))));
+    if (!previous) this.db.prepare('INSERT INTO intake_batches(id,requestId,inputHash,state,createdAt,sealed,manifest) VALUES (?,?,?,?,?,0,?)').run(id, requestId, inputHash, 'processing', now(), encode(files.map(f => ({name: f.name, hash: f.hash, size: f.size}))));
     if (!previous) this.db.prepare('INSERT INTO intake_requests VALUES (?,?)').run(requestId, id);
     for (let i = 0; i < files.length; i++) {
-      const f = files[i]; let photo = this.db.prepare('SELECT * FROM intake_photos WHERE hash=?').get(f.hash), reused = !!photo;
+      const f = files[i], bytes = staged ? await readFile(f.file) : f.bytes; let photo = this.db.prepare('SELECT * FROM intake_photos WHERE hash=?').get(f.hash), reused = !!photo;
       if (!photo) {
         photo = {id: randomUUID(), file: randomUUID() + '.' + f.type};
         this.db.prepare('INSERT INTO intake_photos(id,hash,name,file,state,createdAt) VALUES (?,?,?,?,?,?)').run(photo.id, f.hash, f.name, photo.file, 'saving', now());
         this.db.prepare('INSERT OR IGNORE INTO intake_batch_photos VALUES (?,?,?,?)').run(id, photo.id, i, 0);
         try {
-          await writeImage(resolve(this.imageDir, photo.file), f.bytes);
-          const description = await this.matching.describeImage(f.bytes);
+          await writeImage(resolve(this.imageDir, photo.file), bytes);
+          const description = await this.matching.describeImage(bytes);
           const records = this.db.prepare('SELECT id,description FROM intake_photos WHERE id!=? AND description IS NOT NULL').all(photo.id).map(r => ({id: r.id, ...parse(r.description)}));
           const candidates = description ? this.matching.photoCandidates(description, records) : [];
           this.db.prepare('UPDATE intake_photos SET description=?,state=? WHERE id=?').run(description ? encode(description) : null, candidates.length ? 'attention' : 'queued', photo.id);
@@ -108,7 +109,7 @@ export class IntakeService {
           if (previous && !previous.sealed && photo.state === 'failed') this.db.prepare("UPDATE intake_photos SET state=?,error=NULL WHERE id=?").run(photo.extraction ? 'completed' : 'queued', photo.id);
         } catch {
           try {
-            await writeImage(resolve(this.imageDir, photo.file), f.bytes);
+            await writeImage(resolve(this.imageDir, photo.file), bytes);
             this.db.prepare("UPDATE intake_photos SET state=?,error=NULL WHERE id=?").run(photo.extraction ? 'completed' : 'queued', photo.id);
           } catch (e) { this.db.prepare("UPDATE intake_photos SET state='failed',error=? WHERE id=?").run('原图保存失败：' + e.message, photo.id); }
         }
@@ -197,6 +198,7 @@ export class IntakeService {
     for (let i = 0; i < (extraction.answers || []).length; i++) this.addFragment(batchId, photoId, i, extraction.answers[i]);
   }
   addFragment(batchId, photoId, indexNo, raw) {
+    if (!hasAnswer(raw)) return;
     this.db.prepare('INSERT OR IGNORE INTO intake_fragments(id,batchId,photoId,indexNo,state,data) VALUES (?,?,?,?,?,?)').run(randomUUID(), batchId, photoId, indexNo, 'unlinked', encode({...raw, warning: '', candidates: []}));
   }
   matchingContent(content) {
@@ -306,7 +308,7 @@ export class IntakeService {
       const assigned = new Set();
       const ids = input.parts.map(part => {
         const nid = this.store.addQuestion({...old.content, ...part.content}, part.sources ? this.store.sources(part.sources) : old.sources);
-        for (const aid of part.attemptIds || []) { if (assigned.has(aid) || !old.attempts.some(a => a.id === aid)) throw error('作答不能重复或跨题分配'); assigned.add(aid); this.db.prepare('UPDATE intake_attempts SET questionId=? WHERE id=?').run(nid, aid); this.store.history(aid, 'attempt_moved', 'manual', {questionId: id}, {questionId: nid}); }
+        for (const aid of part.attemptIds || []) { if (assigned.has(aid) || !old.attempts.some(a => a.id === aid)) throw error('作答不能重复或跨题分配'); assigned.add(aid); this.db.prepare('UPDATE intake_attempts SET questionId=? WHERE id=?').run(nid, aid); this.db.prepare('UPDATE intake_fragments SET questionId=? WHERE attemptId=?').run(nid, aid); this.store.history(aid, 'attempt_moved', 'manual', {questionId: id}, {questionId: nid}); }
         return nid;
       });
       this.db.prepare('UPDATE intake_questions SET removed=1,revision=revision+1,updatedAt=? WHERE id=?').run(now(), id);
@@ -345,7 +347,7 @@ export class IntakeService {
     const fields = ['studentAnswer', 'observedError', 'possibleCause', 'causeStatus'];
     const patch = Object.fromEntries(fields.filter(k => typeof input[k] === 'string').map(k => [k, input[k]]));
     if (!Object.keys(patch).length) return;
-    const question = this.store.question(id), attempt = question?.attempts.find(a => a.history.some(h => h.source === 'legacy'));
+    const question = this.store.question(id, true), attempt = question?.attempts.find(a => a.history.some(h => h.source === 'legacy'));
     if (attempt) this.store.updateAttempt(attempt.id, patch);
     else if (patch.studentAnswer?.trim()) this.store.addAttempt(id, {...parse(row.content), ...patch}, question.sources, 'legacy');
   }
