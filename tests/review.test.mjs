@@ -142,3 +142,11 @@ test('model failure is retryable, while real graded outcomes affect recommendati
   const list = (await request('GET', '/api/review/recommendations')).data;
   assert.equal(list[0].id, 'q1'); assert.match(list[0].reason, /仍不会/); assert.equal(calls, 2);
 });
+
+
+test('reviewing a selected legacy question does not parse unrelated malformed records', async t => {
+  const {db, request} = setup(t, {runJson: async () => grading()});
+  db.prepare('UPDATE questions SET content=? WHERE id=?').run('malformed unrelated JSON', 'q4');
+  const selected = await session(request, ['q1']);
+  assert.equal(selected.items[0].question.id, 'q1');
+});

@@ -7,7 +7,7 @@ const stages = {queued:'排队中',saving:'保存原图',processing:'识别中',
 const completeness = {complete:'题目完整',partial:'题目残缺',unclear:'完整性待核对'};
 const origins = {manual:'人工修改',recognition:'识别判断',legacy:'旧记录'};
 let view='import', questions=[], batches=[], materials=[], selected=null, currentQuestion=null, batchFilter='', statusFilter='', tagFilter='', includeRemoved=false;
-let dirty=false, uploading=false, uploadPending=null, refreshing=false, selectionVersion=0, fieldSerial=0, filtersDirty=false;
+let dirty=false, uploading=false, uploadPending=null, refreshing=false, selectionVersion=0, fieldSerial=0, filtersDirty=false, editSerial=0, recoveryRequestId=null;
 const drafts=new Map();
 const keys = new Map();
 const key = name => { if(!keys.has(name))keys.set(name,crypto.randomUUID());return keys.get(name); };
@@ -41,8 +41,9 @@ function source(s,label='原图') {
   return '<figure class="source"><a href="'+escape(s.imageUrl)+'" target="_blank" rel="noopener"><div class="source-image"><img src="'+escape(s.imageUrl)+'" alt="'+escape(label)+'">'+(valid?'<span class="source-box" data-box="'+escape(JSON.stringify(b))+'"></span>':'')+'</div></a><figcaption>'+escape(s.location||label)+' · 点击查看完整原图</figcaption><button data-action="evidence" data-id="'+escape(s.photoId)+'">查看初始识别</button></figure>';
 }
 function draftKey(form){return form.dataset.form+':'+(form.dataset.id||'');}
-function captureDraft(event){const form=event.target.closest('form[data-form]');if(!form)return;drafts.set(draftKey(form),{questionId:selected,values:[...form.elements].filter(el=>el.name&&el.type!=='hidden').map(el=>({name:el.name,value:el.value,checked:el.checked,type:el.type}))});dirty=true;}
-function restoreDrafts(){for(const form of $('detail').querySelectorAll('form[data-form]')){const d=drafts.get(draftKey(form));if(d?.questionId!==selected)continue;for(const v of d.values){const matches=[...form.elements].filter(el=>el.name===v.name),el=v.type==='checkbox'?matches.find(el=>el.value===v.value):matches[0];if(!el)continue;if(v.type==='checkbox')el.checked=v.checked;else el.value=v.value;}}dirty=[...drafts.values()].some(d=>d.questionId===selected);}
+function captureDraft(event){const form=event.target.closest('form[data-form]');if(!form)return;++editSerial;drafts.set(draftKey(form),{questionId:form.closest('#detail')?selected:null,values:[...form.elements].filter(el=>el.name&&el.type!=='hidden').map(el=>({name:el.name,value:el.value,checked:el.checked,type:el.type}))});dirty=true;}
+function restoreDrafts(root=$('detail')){for(const form of root.querySelectorAll('form[data-form]')){const d=drafts.get(draftKey(form));if(!d||d.questionId!==(form.closest('#detail')?selected:null))continue;for(const v of d.values){const matches=[...form.elements].filter(el=>el.name===v.name),el=v.type==='checkbox'?matches.find(el=>el.value===v.value):matches[0];if(!el)continue;if(v.type==='checkbox')el.checked=v.checked;else el.value=v.value;}}dirty=drafts.size>0;}
+
 function evidenceText(value) {
   if(value==null)return '未记录';
   if(typeof value==='string')return value;
@@ -65,7 +66,7 @@ function history(rows=[]) {
 async function load() {
   [questions,batches,materials]=await Promise.all([api('/api/intake/questions?includeRemoved=1'),api('/api/intake/batches'),api('/api/intake/materials')]);
   $('questionCount').textContent=questions.filter(q=>!q.removed).length;
-  $('attentionCount').textContent=batches.reduce((n,b)=>n+b.decisions.filter(d=>d.state==='pending').length+b.fragments.filter(f=>f.state==='unlinked'&&f.warning).length+b.photos.filter(p=>p.state==='failed').length,0);
+  $('attentionCount').textContent=batches.reduce((n,b)=>n+b.warnings.filter(w=>w.type!=='answer_unlinked').length+b.decisions.filter(d=>d.state==='pending').length+b.fragments.filter(f=>f.state==='unlinked'&&f.warning).length+b.photos.filter(p=>p.state==='failed').length,0);
 }
 function questionCard(q) {
   return '<article class="item question-card '+(q.removed?'removed':'')+'"><span class="tag status-'+q.latestStatus+'">'+(states[q.latestStatus]||'待确认')+'</span><span class="tag">'+(q.verified?'已核对':'已保存 · 待核对')+'</span>'+(q.everWrong?'<span class="tag">曾做错</span>':'')+(q.removed?'<span class="tag">已移除</span>':'')+'<p class="question-text">'+math(q.content.question||'题干缺失，请对照原图补充')+'</p><p class="muted">'+escape(tags(q).join(' · '))+' · 第 '+escape(q.content.number||'?')+' 题 · '+q.attempts.length+' 次原作答</p><button data-action="question" data-id="'+q.id+'">查看与修改</button></article>';
@@ -88,22 +89,23 @@ function batchAttention(b) {
   }).join('');
 }
 function batchCard(b) {
-  return '<article class="item batch-card"><div class="card-heading"><strong>'+escape(when(b.createdAt))+'</strong><span class="tag">'+(stages[b.state]||b.state)+'</span></div><p>'+b.photos.length+' 张照片 · '+b.photos.filter(p=>p.state==='completed').length+' 张处理完成 · '+b.questions.length+' 道题已保存</p><div class="photo-list">'+b.photos.map(p=>'<div class="photo-row"><a href="'+escape(p.imageUrl)+'" target="_blank" rel="noopener"><img src="'+escape(p.imageUrl)+'" alt="'+escape(p.name)+'"></a><div><strong>'+escape(p.name)+'</strong><p class="muted">'+(stages[p.state]||p.state)+(p.reused?' · 原图已存在，复用识别结果':'')+'</p>'+(p.error?'<p class="error-text">'+escape(p.error)+'</p>':'')+'<button data-action="evidence" data-id="'+p.id+'">原图与初始识别</button></div></div>').join('')+'</div><div class="actions"><button data-action="batch" data-id="'+b.id+'">查看本批题目</button>'+(b.photos.some(p=>p.state==='failed')||b.state==='partial_failure'?'<button data-action="retry" data-id="'+b.id+'">重试失败部分</button>':'')+'</div>'+batchAttention(b)+'</article>';
+  return '<article class="item batch-card"><div class="card-heading"><strong>'+escape(when(b.createdAt))+'</strong><span class="tag">'+(stages[b.state]||b.state)+'</span></div><p>'+b.photos.length+' 张照片 · '+b.photos.filter(p=>p.state==='completed').length+' 张处理完成 · '+b.questions.length+' 道题已保存</p><div class="photo-list">'+b.photos.map(p=>'<div class="photo-row"><a href="'+escape(p.imageUrl)+'" target="_blank" rel="noopener"><img src="'+escape(p.imageUrl)+'" alt="'+escape(p.name)+'"></a><div><strong>'+escape(p.name)+'</strong><p class="muted">'+(stages[p.state]||p.state)+(p.reused?' · 原图已存在，复用识别结果':'')+'</p>'+(p.error?'<p class="error-text">'+escape(p.error)+'</p>':'')+'<button data-action="evidence" data-id="'+p.id+'">原图与初始识别</button></div></div>').join('')+'</div><div class="actions"><button data-action="batch" data-id="'+b.id+'">查看本批题目</button>'+(b.photos.some(p=>p.state==='failed')||b.state==='partial_failure'?'<button data-action="retry" data-id="'+b.id+'">重试失败部分</button>':'')+'</div>'+b.warnings.filter(w=>w.type!=='answer_unlinked').map(w=>'<p class="notice">'+escape(w.message)+'</p>').join('')+batchAttention(b)+'</article>';
 }
-function render() {
+function render(){renderContent();restoreDrafts($('chat'));}
+function renderContent() {
   document.querySelectorAll('[data-view]').forEach(b=>b.classList.toggle('active',b.dataset.view===view));
   $('heading').textContent={import:'照片录入',questions:'题目档案',attention:'待处理',review:'复习'}[view];
   $('subheading').textContent=view==='review'?'先独立作答，提交后再批阅':'全部题目自动保存；明确错误有依据，其余可以稍后核对';
   $('uploadEntry').hidden=view!=='import';
   if(view==='review'){void review.home();return;}
   if(view==='import'){$('chat').innerHTML=batches.length?batches.map(batchCard).join(''):'<div class="empty">还没有导入照片。选择这次的照片即可开始。</div>';return;}
-  if(view==='attention'){$('chat').innerHTML='<h2>这些地方需要你看一眼</h2><p>其余确定的题目已正常保存。</p>'+(batches.filter(b=>b.decisions.some(d=>d.state==='pending')||b.fragments.some(f=>f.state==='unlinked'&&f.warning)||b.photos.some(p=>p.state==='failed')).map(batchCard).join('')||'<div class="empty">目前没有待处理的重复、作答关联或失败任务。</div>');return;}
+  if(view==='attention'){$('chat').innerHTML='<h2>这些地方需要你看一眼</h2><p>其余确定的题目已正常保存。</p>'+(batches.filter(b=>b.decisions.some(d=>d.state==='pending')||b.fragments.some(f=>f.state==='unlinked'&&f.warning)||b.photos.some(p=>p.state==='failed')||b.warnings.some(w=>w.type!=='answer_unlinked')).map(batchCard).join('')||'<div class="empty">目前没有待处理的重复、作答关联或失败任务。</div>');return;}
   const list=questions.filter(q=>(includeRemoved||!q.removed)&&(!statusFilter||q.latestStatus===statusFilter)&&(!tagFilter||tags(q).some(t=>t.includes(tagFilter)))&&(!batchFilter||batches.find(b=>b.id===batchFilter)?.questions.some(other=>other.id===q.id)));
   $('chat').innerHTML='<div class="filters">'+select('作答状态','filterStatus',{'':'全部状态',...states},statusFilter)+input('标签或知识点','filterTag',tagFilter)+'<label class="check"><input name="includeRemoved" type="checkbox" '+(includeRemoved?'checked':'')+'>显示已移除记录</label><button data-action="filter">筛选</button><button data-action="clear-filter">全部题目</button><button class="primary" data-action="add">＋ 补录漏题</button></div>'+(batchFilter?'<p class="notice">当前仅查看所选上传批次的题目。</p>':'')+'<p class="muted">共 '+list.length+' 道题。保存与核对完成分开，状态不代表已经掌握。</p><div class="question-grid">'+list.map(questionCard).join('')+'</div>'+(!list.length?'<div class="empty">没有符合条件的题目。</div>':'');
 }
 function closePanel(){drafts.clear();selected=null;currentQuestion=null;dirty=false;++selectionVersion;$('panel').hidden=true;$('closePanel').hidden=true;}
 function mayLeave(){return !dirty||window.confirm('这里有尚未保存的修改，确定放弃这些修改吗？');}
-async function navigate(next){if(!mayLeave())return;closePanel();view=next;$('notice').hidden=true;await load();render();}
+async function navigate(next){if(!mayLeave())return;closePanel();if(next==='questions'){batchFilter='';statusFilter='';tagFilter='';includeRemoved=false;filtersDirty=false;}view=next;$('notice').hidden=true;await load();render();}
 function contentFields(c={}) {
   return input('题号','number',c.number)+select('学科','subject',{'':'未分类',数学:'数学',语文:'语文',其他:'其他'},c.subject||'')+input('题干','question',c.question,true)+input('知识点','knowledgePoint',c.knowledgePoint)+input('标签（逗号分隔，可留空）','tags',(c.tags||[]).join('，'))+select('题目完整性','completeness',completeness,c.completeness||'unclear')+input('配图关系说明','diagramDescription',c.diagramDescription,true)+input('共用材料文字','sharedMaterial',c.sharedMaterial,true)+input('原图位置说明','sourceLocation',c.sourceLocation)+(materials.length?'<fieldset><legend>关联已有共用材料</legend>'+materials.map(m=>'<label class="check"><input type="checkbox" name="materialIds" value="'+m.id+'" '+((c.materialIds||[]).includes(m.id)?'checked':'')+'><span>'+escape((m.text||m.description||'共用材料').slice(0,120))+'</span></label>').join('')+'</fieldset>':'');
 }
@@ -118,11 +120,11 @@ function attemptCard(a,i) {
   return '<section class="attempt"><h3>第 '+(i+1)+' 次原作答</h3><p class="muted">'+escape(when(a.createdAt))+' · '+escape(origins[a.statusSource]||a.statusSource)+'</p><form data-form="attempt" data-id="'+a.id+'"><input type="hidden" name="revision" value="'+a.revision+'">'+input('孩子原答案和过程','studentAnswer',a.studentAnswer,true)+teacherFields(a.teacherReview)+select('这次作答状态','status',attemptStates(),a.status)+input('状态修改说明','statusReason',a.statusReason,true)+'<button class="primary">保存这次作答</button></form><details><summary>查看 AI 原始判断与可能错因</summary><p>'+escape(states[a.aiAssessment?.verdict]||'无法判断')+'：'+math(a.aiAssessment?.reason||'')+'</p><p>可观察错误：'+math(a.observedError||'未记录')+'</p><p>可能错因（待确认）：'+math(a.possibleCause||'未提出')+'</p><p>'+escape((a.unclear||[]).join('；'))+'</p></details><details><summary>这次作答的来源</summary>'+a.sources.map(s=>source(s,'原作答来源')).join('')+'</details><details><summary>这次作答的修改记录</summary>'+history(a.history)+'</details></section>';
 }
 async function showQuestion(id,force=false) {
-  if(!force&&!mayLeave())return;const version=++selectionVersion,q=await api('/api/intake/questions/'+id);if(version!==selectionVersion)return;
+  if(!force){if(!mayLeave())return;drafts.clear();dirty=false;}const edits=editSerial,version=++selectionVersion,q=await api('/api/intake/questions/'+id);if(version!==selectionVersion)return;if(edits!==editSerial){notice('读取期间有新的修改，已保留当前输入；保存后再切换题目。');return;}
   selected=id;currentQuestion=q;dirty=false;$('panel').hidden=false;$('closePanel').hidden=false;$('panelTitle').textContent='第 '+(q.content.number||'?')+' 题 · '+(states[q.latestStatus]||'待确认');
   $('detail').innerHTML=(q.removed?'<div class="notice">此题已移除，来源和历史仍保留。'+(q.redirectId?'<button data-action="question" data-id="'+q.redirectId+'">查看合并后的题目</button>':'')+'</div>':'')+'<span class="tag">'+(q.verified?'已核对':'已保存 · 待核对')+'</span>'+(q.everWrong?'<span class="tag">曾做错</span>':'')+'<div class="math-preview">'+math(q.content.question||'题干缺失，待补充')+'</div><details open><summary>对照原图</summary>'+q.sources.map(s=>source(s)).join('')+(!q.sources.length?'<p class="muted">手动补录题，尚未关联照片。</p>':'')+'</details><form data-form="question" data-id="'+q.id+'"><h3>题目信息</h3><input type="hidden" name="revision" value="'+q.revision+'">'+contentFields(q.content)+'<label class="check"><input name="verified" type="checkbox" '+(q.verified?'checked':'')+'>我已核对题干与必要配图</label><button class="primary">保存题目修改</button></form>'+q.materials.map(m=>'<details><summary>编辑关联共用材料</summary><form data-form="material" data-id="'+m.id+'"><input type="hidden" name="revision" value="'+m.revision+'">'+input('材料文字','text',m.text,true)+input('材料说明','description',m.description,true)+'<button>保存共用材料</button></form><p class="muted">共用此材料的小题一起更新，初始识别保留。</p>'+history(m.history)+'</details>').join('')+'<h3>原作答记录 · '+q.attempts.length+' 次</h3>'+q.attempts.map(attemptCard).join('')+(!q.attempts.length?'<p class="notice">本题没有原作答，不计为做错。</p>':'')+(!q.removed?'<details><summary>＋ 补录一次原作答</summary><form data-form="new-attempt" data-id="'+q.id+'">'+input('孩子原答案和过程','studentAnswer','',true)+teacherFields()+select('作答状态','status',attemptStates(),'pending')+input('状态说明','statusReason')+'<button>保存新增作答</button></form></details><details><summary>整理题目边界</summary><p class="muted">来源与历史继续保留。</p><div class="actions"><button data-action="split" data-id="'+q.id+'">拆分小题</button><button data-action="merge" data-id="'+q.id+'">合并重复题</button><button class="danger" data-action="remove" data-id="'+q.id+'">移除误识别题</button></div></details>':'')+'<details><summary>题目初始记录与修改历史</summary>'+history(q.history)+'</details>';restoreDrafts();
 }
-function dialog(title,body){$('dialogTitle').textContent=title;$('dialogBody').innerHTML=body;$('editorDialog').showModal();}
+function dialog(title,body){$('dialogTitle').textContent=title;$('dialogBody').innerHTML=body;$('editorDialog').showModal();restoreDrafts($('dialogBody'));}
 function openAdd(){keys.delete('add');dialog('补录漏题','<form data-form="add">'+contentFields()+select('关联来源照片（可不选）','photoId',{'':'不关联照片',...Object.fromEntries([...new Map(batches.flatMap(b=>b.photos).map(p=>[p.id,p])).values()].map(p=>[p.id,p.name]))},'')+'<button class="primary">保存题目</button></form>');}
 function openSplit(q){
   keys.delete('split');dialog('拆分为独立小题','<form data-form="split" data-id="'+q.id+'"><p>用一行“---”分隔小题。其他信息、材料与来源保留。</p>'+input('小题题干，每题之间一行 ---','parts',q.content.question,true)+'<h3>原作答归属</h3><p class="muted">不确定的作答留在原记录，不删除。</p>'+q.attempts.map((a,i)=>select('第'+(i+1)+'次：'+(a.studentAnswer.slice(0,70)||'见图片'),'attempt-'+a.id,{'':'保留在原记录',...Object.fromEntries(Array.from({length:10},(_,n)=>[n+1,'移到第'+(n+1)+'个小题']))},'')).join('')+'<button class="primary">保存拆分</button></form>');
@@ -165,7 +167,7 @@ async function action(b){
     case 'question':return showQuestion(id);
     case 'close-panel':if(mayLeave())closePanel();return;
     case 'batch':if(!mayLeave())return;closePanel();batchFilter=id;view='questions';render();return;
-    case 'retry':await send('/api/intake/batches/'+id+'/retry',{});await load();render();return notice('已重试失败部分，成功结果继续复用。');
+    case 'retry':{const result=await send('/api/intake/batches/'+id+'/retry',{});await load();render();if(result.warnings.some(w=>w.type==='upload_interrupted')||result.photos.some(p=>/原图缺失/.test(p.error||''))){recoveryRequestId=result.requestId;notice('请重新选择这批全部原照片，补齐上传后会复用已完成结果。');$('file').click();return;}return notice('已重试失败部分，成功结果继续复用。');}
     case 'decision':await send('/api/intake/decisions/'+id,{action:b.dataset.resolution,...(b.dataset.photo?{photoId:b.dataset.photo}:{}),...(b.dataset.question?{questionId:b.dataset.question}:{}),...(b.dataset.attempt?{attemptId:b.dataset.attempt}:{})});await load();render();return notice('处理选择已保存，其他题目不受影响。');
     case 'filter':filtersDirty=false;statusFilter=document.querySelector('[name=filterStatus]').value;tagFilter=document.querySelector('[name=filterTag]').value.trim();includeRemoved=document.querySelector('[name=includeRemoved]').checked;render();return;
     case 'clear-filter':filtersDirty=false;statusFilter='';tagFilter='';includeRemoved=false;batchFilter='';render();return;
@@ -179,8 +181,10 @@ async function action(b){
 async function execute(button,fn){if(button)button.disabled=true;try{await fn();}catch(e){const message=e.message+(/已更新/.test(e.message)?' 请先保留当前输入，再重新打开记录核对。':'');notice(message,true);if($('editorDialog').open){let box=$('dialogError');if(!box){box=document.createElement('p');box.id='dialogError';box.className='notice error';box.setAttribute('role','alert');$('dialogBody').prepend(box);}box.textContent=message;}}finally{if(button?.isConnected)button.disabled=false;}}
 document.addEventListener('input',e=>{if(e.target.closest('.filters'))filtersDirty=true;});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-action]');if(b)void execute(b,()=>action(b));});
-document.addEventListener('submit',e=>{const form=e.target;if(!form.dataset.form)return;e.preventDefault();void execute(e.submitter,async()=>{const id=draftKey(form),d=drafts.get(id);drafts.delete(id);try{await submitForm(form);}catch(error){if(d)drafts.set(id,d);throw error;}});});
-$('detail').addEventListener('input',captureDraft);$('detail').addEventListener('change',captureDraft);
+document.addEventListener('submit',e=>{const form=e.target;if(!form.dataset.form){if(form.closest('#editorDialog')&&!mayLeave())e.preventDefault();return;}e.preventDefault();void execute(e.submitter,async()=>{const id=draftKey(form),d=drafts.get(id);drafts.delete(id);try{await submitForm(form);}catch(error){if(d)drafts.set(id,d);throw error;}});});
+document.addEventListener('input',captureDraft);document.addEventListener('change',captureDraft);
+$('editorDialog').addEventListener('cancel',e=>{if(!mayLeave())e.preventDefault();});
+$('editorDialog').addEventListener('close',()=>{for(const form of $('dialogBody').querySelectorAll('form[data-form]'))drafts.delete(draftKey(form));dirty=drafts.size>0;});
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{void execute(b,()=>navigate(b.dataset.view));});
 $('closePanel').onclick=()=>{if(mayLeave())closePanel();};$('open').onclick=()=>$('file').click();
 async function upload(){
@@ -194,7 +198,7 @@ $('file').onchange=async()=>{
   const files=Array.from($('file').files);$('file').value='';if(!files.length||uploading)return;
   if(files.length>30||files.some(f=>f.size>15*1024*1024)){notice('一次最多30张照片，每张不超过15MB。',true);return;}
   $('uploadStatus').textContent='正在读取'+files.length+'张照片……';$('open').disabled=true;
-  try{const input=[];for(const f of files){const base64=await new Promise((yes,no)=>{const r=new FileReader();r.onload=()=>yes(r.result.split(',')[1]);r.onerror=()=>no(new Error('无法读取照片：'+f.name));r.readAsDataURL(f);});input.push({name:f.name,base64});}uploadPending={requestId:crypto.randomUUID(),files:input};view='import';await upload();}
+  try{const input=[];for(const f of files){const base64=await new Promise((yes,no)=>{const r=new FileReader();r.onload=()=>yes(r.result.split(',')[1]);r.onerror=()=>no(new Error('无法读取照片：'+f.name));r.readAsDataURL(f);});input.push({name:f.name,base64});}uploadPending={requestId:recoveryRequestId||crypto.randomUUID(),files:input};recoveryRequestId=null;view='import';await upload();}
   catch(e){notice(e.message,true);}finally{$('open').disabled=false;}
 };
 async function poll(){if(refreshing)return;refreshing=true;try{if(batches.some(b=>b.state==='processing'||b.photos.some(p=>['queued','processing','saving'].includes(p.state)))){await load();if(!filtersDirty&&!$('editorDialog').open&&view!=='review')render();}}catch{notice('暂时无法读取处理进度，后台可能仍在继续，无需重复上传。',true);}finally{refreshing=false;}}

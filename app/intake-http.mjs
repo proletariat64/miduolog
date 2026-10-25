@@ -17,30 +17,30 @@ export function createIntakeHandler(intake) {
       const [, resource, id, action] = match, method = req.method;
       if (resource === 'batches') {
         if (method === 'POST' && !id) { intakeJson(res, 202, await intake.submit(await intakeBody(req))); return true; }
-        if (method === 'GET') { json(id ? intake.batch(id) : intake.batches()); return true; }
-        if (method === 'POST' && action === 'retry') { json(intake.retry(id)); return true; }
+        if (method === 'GET' && !action) { json(id ? intake.batch(id) : intake.batches()); return true; }
+        if (method === 'POST' && action === 'retry') { json(await intake.retry(id)); return true; }
       }
-      if (resource === 'photos' && method === 'GET') {
+      if (resource === 'photos' && method === 'GET' && (!action || action === 'image')) {
         if (action === 'image') {
           const original = await intake.original(id); if (!original) { json(null); return true; }
           res.writeHead(200, {'Content-Type': original.contentType, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store'}); res.end(original.bytes);
         } else json(intake.photo(id)); return true;
       }
-      if (resource === 'decisions' && id && method === 'POST') { json(intake.resolveDecision(id, await intakeBody(req))); return true; }
+      if (resource === 'decisions' && id && !action && method === 'POST') { json(intake.resolveDecision(id, await intakeBody(req))); return true; }
       if (resource === 'fragments' && action === 'link' && method === 'POST') { json(intake.linkFragment(id, await intakeBody(req))); return true; }
       if (resource === 'questions') {
-        if (method === 'GET') { json(id ? intake.store.question(id, true) : intake.store.listQuestions({status: url.searchParams.get('status'), tag: url.searchParams.get('tag'), batchId: url.searchParams.get('batchId'), includeRemoved: url.searchParams.get('includeRemoved') === '1'})); return true; }
+        if (method === 'GET' && !action) { json(id ? intake.store.question(id, true) : intake.store.listQuestions({status: url.searchParams.get('status'), tag: url.searchParams.get('tag'), batchId: url.searchParams.get('batchId'), includeRemoved: url.searchParams.get('includeRemoved') === '1'})); return true; }
         if (method === 'POST' && !id) { json(intake.createQuestion(await intakeBody(req))); return true; }
         if (method === 'POST' && action === 'split') { json(intake.split(id, await intakeBody(req))); return true; }
         if (method === 'POST' && action === 'merge') { json(intake.merge(id, await intakeBody(req))); return true; }
         if (method === 'POST' && action === 'attempts') { json(intake.appendAttempt(id, await intakeBody(req))); return true; }
-        if (method === 'PATCH' && id) { json(intake.store.updateQuestion(id, await intakeBody(req))); return true; }
-        if (method === 'DELETE' && id) { json(intake.store.remove(id)); return true; }
+        if (method === 'PATCH' && id && !action) { json(intake.store.updateQuestion(id, await intakeBody(req))); return true; }
+        if (method === 'DELETE' && id && !action) { json(intake.store.remove(id)); return true; }
       }
-      if (resource === 'attempts' && method === 'PATCH' && id) { json(intake.store.updateAttempt(id, await intakeBody(req))); return true; }
+      if (resource === 'attempts' && method === 'PATCH' && id && !action) { json(intake.store.updateAttempt(id, await intakeBody(req))); return true; }
       if (resource === 'materials') {
-        if (method === 'GET') { json(id ? intake.store.material(id) : intake.db.prepare('SELECT id FROM intake_materials').all().map(r => intake.store.material(r.id))); return true; }
-        if (method === 'PATCH' && id) { json(intake.store.updateMaterial(id, await intakeBody(req))); return true; }
+        if (method === 'GET' && !action) { json(id ? intake.store.material(id) : intake.store.materials()); return true; }
+        if (method === 'PATCH' && id && !action) { json(intake.store.updateMaterial(id, await intakeBody(req))); return true; }
       }
       intakeJson(res, 405, {error: '不支持的操作'});
     } catch (e) { intakeJson(res, e.status || (e.errcode ? 500 : 400), {error: e.message}); }

@@ -84,7 +84,7 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
         const state = input.state === 'library' ? 'library' : previous.state;
         if (!content.question.trim()) { json(res, 400, {error: '题目不能为空'}); return; }
         db.prepare('UPDATE questions SET state=?,content=? WHERE id=?').run(state, JSON.stringify(content), previous.id);
-        intake.syncLegacyQuestion(previous.id);
+        intake.syncLegacyQuestion(previous.id, input);
         json(res, 200, {ok: true}); return;
       }
       const imageMatch = path.match(/^\/images\/([a-f0-9-]+)$/);

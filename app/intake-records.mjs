@@ -53,11 +53,39 @@ export function questionContent(value = {}) {
 }
 export function validateExtraction(value) {
   if (!value || !Array.isArray(value.questions) || value.questions.length > 150 || (value.answers !== undefined && (!Array.isArray(value.answers) || value.answers.length > 150))) throw new Error('识别题目列表无效');
-  for (const q of value.questions) { questionContent(q); validateAnswer(q); }
-  for (const a of value.answers || []) { validateAnswer(a); string(a.number ?? ''); }
+  const strings = (items, maximum = 150) => {
+    if (items === undefined) return;
+    if (!Array.isArray(items) || items.length > maximum) throw new Error('识别文字列表无效');
+    for (const item of items) string(item);
+  };
+  strings(value.unclear);
+  if (value.pageMarker !== undefined) string(value.pageMarker);
+  if (value.paper !== undefined) {
+    if (!value.paper || typeof value.paper !== 'object' || Array.isArray(value.paper)) throw new Error('卷面信息无效');
+    for (const k of ['title', 'documentId', 'subject', 'grade', 'pageNumber']) if (value.paper[k] !== undefined) string(value.paper[k]);
+    enumValue(value.paper.scope, ['full_page', 'partial_page', 'unknown'], 'unknown');
+  }
+  if (value.materials !== undefined && (!Array.isArray(value.materials) || value.materials.length > 150)) throw new Error('共用材料列表无效');
+  const materialKeys = new Set();
+  for (const m of value.materials || []) {
+    if (!m || typeof m !== 'object') throw new Error('共用材料无效');
+    string(m.key, 200); string(m.text ?? ''); string(m.description ?? '');
+    if (!m.key || materialKeys.has(m.key)) throw new Error('共用材料编号无效或重复');
+    materialKeys.add(m.key);
+  }
+  for (const q of value.questions) {
+    questionContent(q); validateAnswer(q); strings(q.unclear); strings(q.materialKeys);
+    for (const key of q.materialKeys || []) if (!materialKeys.has(key)) throw new Error('题目引用的共用材料不存在');
+    for (const key of ['observedError', 'possibleCause']) if (q[key] !== undefined) string(q[key]);
+    if (q.needsConfirmation !== undefined && typeof q.needsConfirmation !== 'boolean') throw new Error('确认标记无效');
+  }
+  for (const a of value.answers || []) validateAnswer(a);
   return value;
 }
 function validateAnswer(raw) {
+  if (!raw || typeof raw !== 'object') throw new Error('作答记录无效');
+  for (const k of ['number', 'matchKey', 'sourceLocation']) if (raw[k] !== undefined) string(raw[k]);
+  bounds(raw.bbox); enumValue(raw.answerStatus, ['answered', 'unanswered', 'unclear'], 'unclear');
   teacher(raw.teacherReview); assessment(raw.aiAssessment); string(raw.studentAnswer ?? '');
   enumValue(raw.answerPresence, ['present', 'absent', 'unknown'], 'unknown');
   if (raw.answerEvidence !== undefined) string(raw.answerEvidence);

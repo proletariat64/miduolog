@@ -59,7 +59,7 @@ export class IntakeStore {
     const result = classification(raw), id = randomUUID();
     const data = {studentAnswer: string(raw.studentAnswer || ''), answerStatus: enumValue(raw.answerStatus, ['answered', 'unanswered', 'unclear'], raw.studentAnswer ? 'answered' : 'unclear'), teacherReview: teacher(raw.teacherReview), aiAssessment: assessment(raw.aiAssessment), status: result.status, statusReason: result.reason, statusSource: source,
       answerPresence: enumValue(raw.answerPresence, ['present', 'absent', 'unknown'], raw.studentAnswer?.trim() || raw.answerStatus === 'answered' ? 'present' : 'unknown'), answerEvidence: string(raw.answerEvidence || ''),
-      observedError: string(raw.observedError || ''), possibleCause: string(raw.possibleCause || ''), causeStatus: 'pending', unclear: raw.unclear || []};
+      observedError: string(raw.observedError || ''), possibleCause: string(raw.possibleCause || ''), causeStatus: source === 'legacy' ? enumValue(raw.causeStatus, ['pending', 'confirmed', 'disputed'], 'pending') : 'pending', unclear: raw.unclear || []};
     if (source === 'manual' && raw.status !== undefined) { data.status = enumValue(raw.status, statuses); data.statusReason = string(raw.statusReason || '手动录入原作答'); }
     this.db.prepare('INSERT INTO intake_attempts(id,questionId,data,sources,createdAt) VALUES (?,?,?,?,?)').run(id, questionId, encode(data), encode(sources), now());
     this.history(id, 'attempt_created', source, null, data);
@@ -82,16 +82,19 @@ export class IntakeStore {
     let included;
     if (batchId) {
       included = new Set(this.db.prepare('SELECT questionId FROM intake_occurrences WHERE batchId=? AND questionId IS NOT NULL').all(batchId).map(r => r.questionId));
-      // Follow explicit manual lineage, never photo identity alone: a reused
-      // answer sheet must not make its earlier isolated batch acquire questions.
-      const lineage = new Map();
-      for (const row of this.db.prepare("SELECT entityId,afterValue FROM intake_history WHERE kind='question_split'").all()) lineage.set(row.entityId, parse(row.afterValue).questionIds);
-      for (const row of this.db.prepare('SELECT id,redirectId FROM intake_questions WHERE redirectId IS NOT NULL').all()) lineage.set(row.id, [row.redirectId]);
-      const pending = [...included];
-      for (let i = 0; i < pending.length; i++) for (const child of lineage.get(pending[i]) || []) if (!included.has(child)) { included.add(child); pending.push(child); }
+      included = this.lineageIds(included);
     }
     return ids.map(id => this.question(id, includeRemoved)).filter(q => q && (!batchId || included.has(q.id))
       && (!status || q.latestStatus === status) && (!tag || q.content.tags.includes(tag) || q.content.knowledgePoint === tag || q.content.subject === tag));
+  }
+  lineageIds(ids) {
+    // Explicit split/merge lineage belongs to the original batch; photo identity does not.
+    const included = new Set(ids), lineage = new Map();
+    for (const row of this.db.prepare("SELECT entityId,afterValue FROM intake_history WHERE kind='question_split'").all()) lineage.set(row.entityId, parse(row.afterValue).questionIds);
+    for (const row of this.db.prepare('SELECT id,redirectId FROM intake_questions WHERE redirectId IS NOT NULL').all()) lineage.set(row.id, [row.redirectId]);
+    const pending = [...included];
+    for (let i = 0; i < pending.length; i++) for (const child of lineage.get(pending[i]) || []) if (!included.has(child)) { included.add(child); pending.push(child); }
+    return included;
   }
   assertRevision(row, input) { if (input.expectedRevision !== undefined && input.expectedRevision !== row.revision) throw Object.assign(new Error('内容已更新，请重新读取后修改'), {status: 409}); }
   updateQuestion(id, input) {
@@ -105,12 +108,15 @@ export class IntakeStore {
   }
   updateAttempt(id, input) {
     const previous = this.attempt(id); if (!previous) return null; this.assertRevision(previous, input);
-    const data = {...previous}; for (const field of ['questionId','sources','revision','createdAt','history','id']) delete data[field];
+    const before = parse(this.db.prepare('SELECT data FROM intake_attempts WHERE id=?').get(id).data);
+    const data = {...before};
     if (input.studentAnswer !== undefined) data.studentAnswer = string(input.studentAnswer);
+    for (const key of ['observedError', 'possibleCause']) if (input[key] !== undefined) data[key] = string(input[key]);
+    if (input.causeStatus !== undefined) data.causeStatus = enumValue(input.causeStatus, ['pending', 'confirmed', 'disputed']);
     if (input.teacherReview !== undefined) data.teacherReview = teacher(input.teacherReview);
     if (input.status !== undefined) { data.status = enumValue(input.status, statuses); data.statusReason = string(input.statusReason || '手动修改状态'); }
     data.statusSource = 'manual';
-    this.transaction(() => { this.db.prepare('UPDATE intake_attempts SET data=?,revision=revision+1 WHERE id=?').run(encode(data), id); this.history(id, 'attempt_edited', 'manual', previous, data); });
+    this.transaction(() => { this.db.prepare('UPDATE intake_attempts SET data=?,revision=revision+1 WHERE id=?').run(encode(data), id); this.history(id, 'attempt_edited', 'manual', before, data); });
     return this.attempt(id);
   }
   remove(id) {
@@ -124,6 +130,7 @@ export class IntakeStore {
     this.db.prepare('UPDATE intake_questions SET sources=?,updatedAt=? WHERE id=?').run(encode(combined([...target.sources, ...sources])), now(), questionId);
     if (attemptId) { const attempt = this.attempt(attemptId); if (!attempt || attempt.questionId !== questionId) throw new Error('作答不属于该题'); this.db.prepare('UPDATE intake_attempts SET sources=? WHERE id=?').run(encode(combined([...attempt.sources, ...sources])), attemptId); }
   }
+  materials() { return this.db.prepare('SELECT id FROM intake_materials ORDER BY rowid').all().map(row => this.material(row.id)); }
   material(id) { const row = this.db.prepare('SELECT * FROM intake_materials WHERE id=?').get(id); return row ? {id, ...parse(row.data), sources: parse(row.sources), revision: row.revision, history: this.histories(id)} : null; }
   addMaterial(raw, sources) { const id = randomUUID(), data = {text: string(raw.text || ''), description: string(raw.description || '')}; this.db.prepare('INSERT INTO intake_materials(id,data,sources) VALUES (?,?,?)').run(id, encode(data), encode(sources)); this.history(id, 'material_created', 'recognition', null, data); return id; }
   updateMaterial(id, input) {
