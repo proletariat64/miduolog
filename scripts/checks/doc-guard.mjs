@@ -38,7 +38,7 @@ export function auditRepository({files, read, policy}) {
     if (inventory.has(target) && target.endsWith('.md')) edges.get(file)?.add(target);
   }
   function checkCommands(file, text) {
-    for (const match of text.matchAll(/\bnpm\s+run\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g)) {
+    for (const match of text.matchAll(/\bnpm\s+run\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|()<>`]+))/g)) {
       const name = match[1] ?? match[2] ?? match[3];
       if (!Object.hasOwn(packageJson.scripts ?? {}, name)) report(file, `npm script 不存在：${name}`);
     }

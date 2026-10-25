@@ -111,6 +111,7 @@ test('npm script names are compared in full, including dots and quoted names', (
   const files = fixture();
   files['package.json'] = JSON.stringify({scripts: {'test.unit': 'node --test', 'test unit': 'node --test'}});
   files['README.md'] += '\n```sh\nnpm run test.unit\nnpm run "test unit"\n```\n';
+  files['README.md'] += '\n```sh\n(npm run test.unit)\nnpm run test.unit>check.log\nnpm run test.unit<input.txt\n```\n';
   assert.deepEqual(audit(files), []);
   files['README.md'] += '\n`npm run test.unit.missing`\n';
   assert.ok(audit(files).some(error => error.includes('npm script 不存在：test.unit.missing')));
