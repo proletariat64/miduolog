@@ -106,7 +106,7 @@ function renderContent() {
   const list=questions.filter(q=>(includeRemoved||!q.removed)&&(!statusFilter||q.latestStatus===statusFilter)&&(!tagFilter||tags(q).some(t=>t.includes(tagFilter)))&&(!batchFilter||batches.find(b=>b.id===batchFilter)?.questions.some(other=>other.id===q.id)));
   $('chat').innerHTML='<div class="filters">'+select('作答状态','filterStatus',{'':'全部状态',...states},statusFilter)+input('标签或知识点','filterTag',tagFilter)+'<label class="check"><input name="includeRemoved" type="checkbox" '+(includeRemoved?'checked':'')+'>显示已移除记录</label><button data-action="filter">筛选</button><button data-action="clear-filter">全部题目</button><button class="primary" data-action="add">＋ 补录漏题</button></div>'+(batchFilter?'<p class="notice">当前仅查看所选上传批次的题目。</p>':'')+'<p class="muted">共 '+list.length+' 道题。保存与核对完成分开，状态不代表已经掌握。</p><div class="question-grid">'+list.map(questionCard).join('')+'</div>'+(!list.length?'<div class="empty">没有符合条件的题目。</div>':'');
 }
-function editorContext(form){return {selectionVersion,editorVersion,editSerial,view,selected,dialogOpen:$('editorDialog').open,form};}
+function editorContext(){return {selectionVersion,editorVersion,editSerial,view,selected,dialogOpen:$('editorDialog').open};}
 function sameEditor(context){return context.selectionVersion===selectionVersion&&context.editorVersion===editorVersion&&context.editSerial===editSerial&&context.view===view&&context.selected===selected&&context.dialogOpen===$('editorDialog').open;}
 function closePanel(){drafts.clear();selected=null;currentQuestion=null;dirty=false;++selectionVersion;$('panel').hidden=true;$('closePanel').hidden=true;}
 function mayLeave(){return !dirty||window.confirm('这里有尚未保存的修改，确定放弃这些修改吗？');}
@@ -144,7 +144,6 @@ async function saved(message,id,context,options={}){
   dirty=drafts.size>0;let owned=sameEditor(context);
   if(owned){
     if(options.closeDialog)$('editorDialog').close();
-    if(options.resetForm)context.form?.reset();
     if(options.archive)view='questions';
     if(options.clearFilters){batchFilter='';statusFilter='';tagFilter='';includeRemoved=false;}
     context=editorContext();
@@ -173,14 +172,14 @@ async function command(form,path,payload){
 }
 function commandCompletion(form,result,context){
   switch(form.dataset.form){
-    case 'new-attempt':return saved('新增原作答已保存，旧作答不变。',result.questionId,context,{resetForm:true});
+    case 'new-attempt':return saved('新增原作答已保存，旧作答不变。',result.questionId,context);
     case 'add':return saved('补录题目已保存，可以继续补充原作答。',result.id,context,{closeDialog:true,archive:true,clearFilters:true});
     case 'split':return saved('小题已拆分。未分配作答保留在原记录，可显示已移除记录查看。',result[0].id,context,{closeDialog:true,clearFilters:true});
     case 'merge':return saved('题目已合并，各次作答、来源和历史均保留。',result.id,context,{closeDialog:true});
   }
 }
 async function submitForm(form){
-  const type=form.dataset.form,id=form.dataset.id,d=new FormData(form),context=editorContext(form);
+  const type=form.dataset.form,id=form.dataset.id,d=new FormData(form),context=editorContext();
   if(completedForms.has(form))return commandCompletion(form,completedForms.get(form),context);
   switch(type){
     case 'question':await send('/api/intake/questions/'+id,{content:contentFrom(form,currentQuestion.content),verified:d.has('verified'),expectedRevision:Number(d.get('revision'))},'PATCH');return saved('题目信息已保存，初始识别与作答历史仍保留。',id,context);
