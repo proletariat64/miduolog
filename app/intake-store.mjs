@@ -79,8 +79,19 @@ export class IntakeStore {
   }
   listQuestions({status, tag, batchId, includeRemoved = false} = {}) {
     let ids = this.db.prepare('SELECT id FROM intake_questions ORDER BY createdAt DESC,rowid DESC').all().map(r => r.id);
-    if (batchId) { const included = new Set(this.db.prepare('SELECT questionId FROM intake_occurrences WHERE batchId=? AND questionId IS NOT NULL').all(batchId).map(r => r.questionId)); ids = ids.filter(id => included.has(id)); }
-    return ids.map(id => this.question(id, includeRemoved)).filter(q => q && (!status || q.latestStatus === status) && (!tag || q.content.tags.includes(tag) || q.content.knowledgePoint === tag || q.content.subject === tag));
+    let included;
+    if (batchId) {
+      included = new Set(this.db.prepare('SELECT questionId FROM intake_occurrences WHERE batchId=? AND questionId IS NOT NULL').all(batchId).map(r => r.questionId));
+      // Follow explicit manual lineage, never photo identity alone: a reused
+      // answer sheet must not make its earlier isolated batch acquire questions.
+      const lineage = new Map();
+      for (const row of this.db.prepare("SELECT entityId,afterValue FROM intake_history WHERE kind='question_split'").all()) lineage.set(row.entityId, parse(row.afterValue).questionIds);
+      for (const row of this.db.prepare('SELECT id,redirectId FROM intake_questions WHERE redirectId IS NOT NULL').all()) lineage.set(row.id, [row.redirectId]);
+      const pending = [...included];
+      for (let i = 0; i < pending.length; i++) for (const child of lineage.get(pending[i]) || []) if (!included.has(child)) { included.add(child); pending.push(child); }
+    }
+    return ids.map(id => this.question(id, includeRemoved)).filter(q => q && (!batchId || included.has(q.id))
+      && (!status || q.latestStatus === status) && (!tag || q.content.tags.includes(tag) || q.content.knowledgePoint === tag || q.content.subject === tag));
   }
   assertRevision(row, input) { if (input.expectedRevision !== undefined && input.expectedRevision !== row.revision) throw Object.assign(new Error('内容已更新，请重新读取后修改'), {status: 409}); }
   updateQuestion(id, input) {
