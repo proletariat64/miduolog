@@ -85,21 +85,27 @@ function validPhoto(description) {
 // dHash narrows layout; an ink thumbnail also compares printed content without
 // letting the large white page background dominate. Missing old descriptors are
 // conservative until rebuilt from the original. Always a suggestion.
-function inkSimilarity(left, right) {
-  if (typeof left !== 'string' || typeof right !== 'string') return 0;
-  const a = Buffer.from(left, 'base64'), b = Buffer.from(right, 'base64');
-  if (a.length !== 128 * 128 || b.length !== a.length) return 0;
+function decodeInk(value) {
+  if (typeof value !== 'string') return null;
+  const bytes = Buffer.from(value, 'base64');
+  return bytes.length === 128 * 128 ? bytes : null;
+}
+function inkSimilarity(a, b) {
+  if (!a || !b) return 0;
   let overlap = 0, total = 0;
   for (let i = 0; i < a.length; i++) { overlap += Math.min(a[i], b[i]); total += a[i] + b[i]; }
   return total ? 2 * overlap / total : 0;
 }
 export function photoCandidates(description, records = []) {
   if (!validPhoto(description) || !Array.isArray(records)) return [];
+  let ink;
   return records.filter(validPhoto).flatMap(record => {
     const aspectDifference = Math.abs((description.width / description.height) / (record.width / record.height) - 1);
-    if (aspectDifference > 0.03 || inkSimilarity(description.ink, record.ink) < 0.9) return [];
+    if (aspectDifference > 0.03) return [];
     let different = BigInt('0x' + description.dhash) ^ BigInt('0x' + record.dhash), distance = 0;
     while (different) { different &= different - 1n; distance++; }
-    return distance <= 20 ? [{id: record.id, score: 1 - distance / 256, kind: 'similar'}] : [];
+    if (distance > 20) return [];
+    if (ink === undefined) ink = decodeInk(description.ink);
+    return inkSimilarity(ink, decodeInk(record.ink)) >= 0.9 ? [{id: record.id, score: 1 - distance / 256, kind: 'similar'}] : [];
   }).sort((a, b) => b.score - a.score || String(a.id).localeCompare(String(b.id))).slice(0, 20);
 }

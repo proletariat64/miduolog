@@ -186,7 +186,8 @@ document.addEventListener('input',captureDraft);document.addEventListener('chang
 $('editorDialog').addEventListener('cancel',e=>{if(!mayLeave())e.preventDefault();});
 $('editorDialog').addEventListener('close',()=>{for(const form of $('dialogBody').querySelectorAll('form[data-form]'))drafts.delete(draftKey(form));dirty=drafts.size>0;});
 document.querySelectorAll('[data-view]').forEach(b=>b.onclick=()=>{void execute(b,()=>navigate(b.dataset.view));});
-$('closePanel').onclick=()=>{if(mayLeave())closePanel();};$('open').onclick=()=>$('file').click();
+$('closePanel').onclick=()=>{if(mayLeave())closePanel();};$('open').onclick=()=>{recoveryRequestId=null;$('file').click();};
+$('file').addEventListener('cancel',()=>{recoveryRequestId=null;});
 async function upload(){
   if(!uploadPending||uploading)return;uploading=true;$('open').disabled=true;$('retryUpload').hidden=true;$('uploadStatus').textContent='正在保存'+uploadPending.files.length+'张照片并检查重复……';
   try{await send('/api/intake/batches',uploadPending);uploadPending=null;$('uploadStatus').textContent='原图已保存，可在下方查看每张照片进度，结果自动保存。';await load();if(view!=='review')render();}
@@ -195,10 +196,11 @@ async function upload(){
 }
 $('retryUpload').onclick=()=>{void upload();};
 $('file').onchange=async()=>{
+  const requestId=recoveryRequestId||crypto.randomUUID();recoveryRequestId=null;
   const files=Array.from($('file').files);$('file').value='';if(!files.length||uploading)return;
   if(files.length>30||files.some(f=>f.size>15*1024*1024)){notice('一次最多30张照片，每张不超过15MB。',true);return;}
   $('uploadStatus').textContent='正在读取'+files.length+'张照片……';$('open').disabled=true;
-  try{const input=[];for(const f of files){const base64=await new Promise((yes,no)=>{const r=new FileReader();r.onload=()=>yes(r.result.split(',')[1]);r.onerror=()=>no(new Error('无法读取照片：'+f.name));r.readAsDataURL(f);});input.push({name:f.name,base64});}uploadPending={requestId:recoveryRequestId||crypto.randomUUID(),files:input};recoveryRequestId=null;view='import';await upload();}
+  try{const input=[];for(const f of files){const base64=await new Promise((yes,no)=>{const r=new FileReader();r.onload=()=>yes(r.result.split(',')[1]);r.onerror=()=>no(new Error('无法读取照片：'+f.name));r.readAsDataURL(f);});input.push({name:f.name,base64});}uploadPending={requestId,files:input};view='import';await upload();}
   catch(e){notice(e.message,true);}finally{$('open').disabled=false;}
 };
 async function poll(){if(refreshing)return;refreshing=true;try{if(batches.some(b=>b.state==='processing'||b.photos.some(p=>['queued','processing','saving'].includes(p.state)))){await load();if(!filtersDirty&&!$('editorDialog').open&&view!=='review')render();}}catch{notice('暂时无法读取处理进度，后台可能仍在继续，无需重复上传。',true);}finally{refreshing=false;}}

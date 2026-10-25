@@ -119,3 +119,13 @@ test('printed pages with a common layout but different question or answer conten
   assert.deepEqual(photoCandidates(await describeImage(different), [{id: 'different-content', ...description}]), []);
   for (const encoded of [await sharp(original).resize(700).jpeg({quality: 70}).toBuffer(), await sharp(original).resize(1800).webp({quality: 65}).toBuffer()]) assert.equal(photoCandidates(await describeImage(encoded), [{id: 'same', ...description}])[0]?.id, 'same');
 });
+
+
+test('photo candidate scans reject distant layouts before loading ink and reuse the input thumbnail', async () => {
+  const description = await describeImage(await worksheet()); let inputReads = 0, unrelatedReads = 0;
+  const input = {...description, get ink() { inputReads++; return description.ink; }};
+  const distant = {...description, id: 'other-layout', dhash: (BigInt('0x' + description.dhash) ^ ((1n << 256n) - 1n)).toString(16).padStart(64, '0'), get ink() { unrelatedReads++; return description.ink; }};
+  const records = [distant, ...Array.from({length: 100}, (_, i) => ({id: String(i), ...description}))];
+  assert.equal(photoCandidates(input, records).length, 20);
+  assert.equal(unrelatedReads, 0); assert.equal(inputReads, 1);
+});

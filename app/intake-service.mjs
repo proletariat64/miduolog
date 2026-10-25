@@ -26,6 +26,7 @@ export class IntakeService {
     this.db.prepare("UPDATE intake_photos SET state='failed',token=NULL,error='上次识别中断，请明确重试' WHERE state IN ('saving','processing')").run();
     this.db.exec('CREATE TABLE IF NOT EXISTS intake_photo_materials(photoId TEXT NOT NULL,localKey TEXT NOT NULL,materialId TEXT NOT NULL,PRIMARY KEY(photoId,localKey))');
     this.matching = matching;
+    this.db.exec('CREATE TABLE IF NOT EXISTS intake_requests(requestId TEXT PRIMARY KEY,batchId TEXT NOT NULL)');
     if (!this.db.prepare('PRAGMA table_info(intake_photos)').all().some(c => c.name === 'reusedFrom')) this.db.exec('ALTER TABLE intake_photos ADD COLUMN reusedFrom TEXT');
     if (!this.db.prepare('PRAGMA table_info(intake_batches)').all().some(c => c.name === 'sealed')) this.db.exec('ALTER TABLE intake_batches ADD COLUMN sealed INTEGER NOT NULL DEFAULT 1');
     if (!this.db.prepare('PRAGMA table_info(intake_batches)').all().some(c => c.name === 'manifest')) this.db.exec('ALTER TABLE intake_batches ADD COLUMN manifest TEXT');
@@ -79,11 +80,13 @@ export class IntakeService {
       if (!type || bytes.length > 15 * 1024 * 1024) throw error('请使用15MB以下的PNG、JPEG或WebP图片');
       return {name: basename(name), bytes, type, hash: digest(bytes)};
     });
-    const inputHash = digest(files.map(f => ({name: f.name, hash: f.hash}))), previous = this.db.prepare('SELECT * FROM intake_batches WHERE requestId=?').get(requestId) || this.db.prepare('SELECT * FROM intake_batches WHERE inputHash=? AND sealed=0 ORDER BY rowid DESC LIMIT 1').get(inputHash);
+    const inputHash = digest(files.map(f => ({name: f.name, hash: f.hash}))), previous = this.db.prepare('SELECT * FROM intake_batches WHERE requestId=? OR id=(SELECT batchId FROM intake_requests WHERE requestId=?) LIMIT 1').get(requestId, requestId) || this.db.prepare('SELECT * FROM intake_batches WHERE inputHash=? AND sealed=0 ORDER BY rowid DESC LIMIT 1').get(inputHash);
     if (previous && previous.inputHash !== inputHash) throw error('本次请求编号已用于不同照片', 409);
+    if (previous) this.db.prepare('INSERT OR IGNORE INTO intake_requests VALUES (?,?)').run(requestId, previous.id);
     if (previous?.sealed && !this.batch(previous.id).photos.some(p => p.state === 'failed')) return this.batch(previous.id);
     const id = previous?.id || randomUUID();
     if (!previous) this.db.prepare('INSERT INTO intake_batches(id,requestId,inputHash,state,createdAt,sealed,manifest) VALUES (?,?,?,?,?,0,?)').run(id, requestId, inputHash, 'processing', now(), encode(files.map(f => ({name: f.name, hash: f.hash, size: f.bytes.length}))));
+    if (!previous) this.db.prepare('INSERT INTO intake_requests VALUES (?,?)').run(requestId, id);
     for (let i = 0; i < files.length; i++) {
       const f = files[i]; let photo = this.db.prepare('SELECT * FROM intake_photos WHERE hash=?').get(f.hash), reused = !!photo;
       if (!photo) {
@@ -145,7 +148,7 @@ export class IntakeService {
         const photos = this.db.prepare('SELECT p.* FROM intake_photos p JOIN intake_batch_photos bp ON bp.photoId=p.id WHERE bp.batchId=? ORDER BY bp.position').all(batch.id);
         for (const photo of photos) if (photo.state === 'completed' && photo.extraction) {
           try { this.store.transaction(() => { const extraction = parse(photo.extraction); validateExtraction(extraction); this.ingest(batch.id, photo.id, extraction); }); }
-          catch (e) { photo.state = 'failed'; this.db.prepare("UPDATE intake_photos SET state='failed',error=? WHERE id=?").run('识别结果不可录入：' + e.message, photo.id); }
+          catch (e) { if ([5, 6].includes(e.errcode & 255)) throw e; photo.state = 'failed'; this.db.prepare("UPDATE intake_photos SET state='failed',error=? WHERE id=?").run('识别结果不可录入：' + e.message, photo.id); }
         }
         this.store.transaction(() => {
         const processing = photos.some(p => active.includes(p.state));
