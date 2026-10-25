@@ -1,7 +1,7 @@
 """生成代码绘制的测试作业，不含真实学生数据。"""
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
-out = Path(__file__).resolve().parents[1] / '.scratch/mistake-notebook/verification'
+out = Path(__file__).resolve().parents[2] / '.scratch/mistake-notebook/verification'
 out.mkdir(parents=True, exist_ok=True)
 image = Image.new('RGB', (1400, 960), 'white')
 draw = ImageDraw.Draw(image)

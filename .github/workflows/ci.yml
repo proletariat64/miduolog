@@ -22,5 +22,10 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run check
+      - name: Lint
+        run: npm run lint
+      - name: Doc guard
+        run: npm run docs:check
+      - name: Tests
+        run: npm test
       - run: git diff --check

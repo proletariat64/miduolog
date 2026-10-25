@@ -1,0 +1,14 @@
+{
+  "required": ["README.md", "AGENTS.md", "docs/index.md", "docs/architecture.md", "docs/development.md", "docs/glossary.md", "docs/repository-structure.md"],
+  "paths": [
+    "^(README\\.md|AGENTS\\.md|package(-lock)?\\.json|eslint\\.config\\.mjs|start-notebook\\.cmd|\\.gitignore)$",
+    "^app/([a-z0-9]+(-[a-z0-9]+)*/)*[a-z0-9]+(-[a-z0-9]+)*\\.(mjs|js|html|css)$",
+    "^docs/([a-z0-9]+(-[a-z0-9]+)*/)*[a-z0-9]+(-[a-z0-9]+)*\\.md$",
+    "^config/[a-z0-9]+(-[a-z0-9]+)*\\.json$",
+    "^scripts/(checks|operations|verification|lib)/[a-z0-9]+(-[a-z0-9]+)*\\.(mjs|py)$",
+    "^tests/[a-z0-9]+(-[a-z0-9]+)*(\\.test)?\\.mjs$",
+    "^prototypes/[a-z0-9]+(-[a-z0-9]+)*/(index\\.html|[a-z0-9]+(-[a-z0-9]+)*\\.(js|css))$",
+    "^\\.github/workflows/[a-z0-9]+(-[a-z0-9]+)*\\.yml$",
+    "^\\.github/pull_request_template\\.md$"
+  ]
+}

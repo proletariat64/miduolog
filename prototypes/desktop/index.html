@@ -46,5 +46,5 @@ $('open').onclick=()=>$('file').click();$('file').onchange=()=>{const f=$('file'
 function send(){const t=$('reply').value.trim();if(!t)return;message('我','<div class="bubble">'+escapeHtml(t).replace(/\n/g,'<br>')+'</div>');$('reply').value='';message('系统','<p>这是对话输入效果演示。正式软件将在这里由模型继续处理；当前草稿不调用模型。</p>');}
 $('recognized').oninput=updatePreview;$('send').onclick=send;$('reply').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send();}};renderFractions($('original'));renderFractions($('analysis'));updatePreview();start();sync();
 </script>
-<script src="review-prototype.js"></script>
+<script src="review.js"></script>
 </html>

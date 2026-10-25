@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {waitForImport} from '../scripts/poll-import.mjs';
+import {waitForImport} from '../scripts/lib/poll-import.mjs';
 
 test('recognition receives its own deadline after spending time in the queue', async () => {
   let time = 0;

@@ -10,7 +10,7 @@
 
 可输入文字或打开本次作答图片，提交后由 Codex 真实批阅。提示也通过 Codex 生成，使用情况单独记录。结果分为独立做对、提示后做对、仍不会、待确认。信息不足或异议不计错；处理失败可保留作答后重试。原错因和掌握状态不会因批阅自动改变。
 
-会话、题目快照、每次作答、提示、批阅及异议保存在本地 SQLite，可从复习入口继续或查看历史。作答图片位于 `data/review-images/`。首次四题验证单独标记为验证记录，不纳入真实推荐统计；已准备一轮尚未作答的正式四题复习。
+会话、题目快照、每次作答、提示、批阅及异议保存在本地 SQLite，可从复习入口继续或查看历史。作答图片位于 `data/review-images/`。验证记录不纳入真实推荐统计。
 
 ## 运行
 
@@ -38,12 +38,12 @@ npm start
 npm run check
 ```
 
-隔离测试覆盖导入去重与恢复、Codex 调用生命周期、复习并发提交及真实 HTTP 入口，不调用模型或修改本地真实数据。架构说明见 [docs/architecture.md](docs/architecture.md)，业务用语见 [GLOSSARY.md](GLOSSARY.md)。
+隔离测试覆盖导入去重与恢复、Codex 调用生命周期、复习并发提交及真实 HTTP 入口，不调用模型或修改本地真实数据。架构说明见 [docs/architecture.md](docs/architecture.md)，业务用语见 [docs/glossary.md](docs/glossary.md)。
 
-`npm run check` 顺序运行 ESLint 和测试；也可单独使用 `npm run lint` 或 `npm test`。GitHub Actions 在 Windows、Linux 的 Node.js 24 环境中执行同样的检查。开发到 PR 的流程见 [docs/development.md](docs/development.md)。
+`npm run check` 顺序运行 ESLint、doc guard 和隔离测试；也可单独使用 `npm run lint` 或 `npm test`。GitHub Actions 在 Windows、Linux 的 Node.js 24 环境中执行同样的检查。开发到 PR 的流程见 [docs/development.md](docs/development.md)。
 
 ```sh
-python scripts/make-vision-fixture.py
+python scripts/verification/make-vision-fixture.py
 npm run verify:codex
 ```
 
@@ -52,14 +52,14 @@ npm run verify:codex
 目录批处理通过运行中的错题本执行：
 
 ```sh
-node scripts/batch-import-papers.mjs samples/papers --plan
-node scripts/batch-import-papers.mjs samples/papers --run
+node scripts/operations/batch-import-papers.mjs samples/papers --plan
+node scripts/operations/batch-import-papers.mjs samples/papers --run
 ```
 
 `--plan` 只向本机检查图片是否已导入，不调用模型；`--run` 复用相同内容的任务并将新结果放入待核对区。浏览器与批处理使用同一套去重及恢复规则。
 
 ## 当前边界
 
-跨图片合并、自动追问、主次错因完整编辑、重复题提示、备份恢复及独立桌面打包尚待接入；此前 `prototypes/` 下的页面仍是独立演示。
+跨图片合并、自动追问、主次错因完整编辑、重复题提示、备份恢复及独立桌面打包尚待接入；[桌面原型](prototypes/desktop/index.html)仅是独立演示。
 
-本地开发需求和决策保存在 `.scratch/mistake-notebook/spec.md` 与 `map.md`。`.scratch/` 包含运行记录及验证素材，仅保留在开发电脑，不提交到版本仓库；真实数据也不会随源码分发。
+长期说明从[文档索引](docs/index.md)进入；新增和迁移文件遵守[目录组织与文档维护](docs/repository-structure.md)。本机临时笔记、运行记录及验证素材留在 Git 忽略目录 `.scratch/`，不作为项目使用前提。
