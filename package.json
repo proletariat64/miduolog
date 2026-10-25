@@ -22,5 +22,9 @@
     "eslint": "^10.13.0",
     "globals": "^17.13.0",
     "marked": "^18.1.1"
+  },
+  "dependencies": {
+    "busboy": "^1.6.0",
+    "sharp": "0.35.5"
   }
 }

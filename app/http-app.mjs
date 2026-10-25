@@ -4,6 +4,8 @@ import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {PaperImports, imageType} from './paper-import.mjs';
 import {ReviewService} from './review-service.mjs';
+import {IntakeService} from './intake-service.mjs';
+import {createIntakeHandler} from './intake-http.mjs';
 
 const appDir = dirname(fileURLToPath(import.meta.url));
 function json(res, status, data) {
@@ -29,7 +31,9 @@ function uploadedBytes(input) {
 export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3000}) {
   db.exec('PRAGMA journal_mode=WAL');
   const imports = await PaperImports.open({db, client, dataDir});
-  const review = new ReviewService({db, client, dataDir, imageType});
+  const intake = await IntakeService.open({db, client, dataDir});
+  const intakeHandle = createIntakeHandler(intake);
+  const review = new ReviewService({db, client, dataDir, imageType, catalog: intake});
   let closing = false, closePromise;
   const requests = new Set();
   async function handle(req, res) {
@@ -45,6 +49,7 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
         json(res, 403, {error: '请求来源不匹配'}); return;
       }
       if (path.startsWith('/api/review/')) { await review.handle(req, res, path, {body, json}); return; }
+      if (await intakeHandle(req, res, url)) return;
       if (req.method === 'GET' && path === '/api/status') {
         const account = await client.request('account/read', {refreshToken: false});
         json(res, 200, {loggedIn: !!account.account, authType: account.account?.type || null, busy: imports.busy}); return;
@@ -71,14 +76,17 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
       if (req.method === 'PATCH' && qMatch) {
         const previous = db.prepare('SELECT * FROM questions WHERE id=?').get(qMatch[1]);
         if (!previous) { json(res, 404, {error: '题目不存在'}); return; }
-        const input = await body(req), content = JSON.parse(previous.content);
+        const input = await body(req), content = JSON.parse(previous.content), accepted = {};
         for (const key of ['question', 'studentAnswer', 'subject', 'knowledgePoint', 'observedError', 'possibleCause']) {
-          if (typeof input[key] === 'string') content[key] = input[key].slice(0, 30000);
+          if (typeof input[key] === 'string') accepted[key] = content[key] = input[key].slice(0, 30000);
         }
-        if (['pending', 'confirmed', 'disputed'].includes(input.causeStatus)) content.causeStatus = input.causeStatus;
+        if (['pending', 'confirmed', 'disputed'].includes(input.causeStatus)) accepted.causeStatus = content.causeStatus = input.causeStatus;
         const state = input.state === 'library' ? 'library' : previous.state;
         if (!content.question.trim()) { json(res, 400, {error: '题目不能为空'}); return; }
-        db.prepare('UPDATE questions SET state=?,content=? WHERE id=?').run(state, JSON.stringify(content), previous.id);
+        intake.store.transaction(() => {
+          db.prepare('UPDATE questions SET state=?,content=? WHERE id=?').run(state, JSON.stringify(content), previous.id);
+          intake.syncLegacyQuestion(previous.id, {...accepted, ...(input.state === 'library' ? {state} : {})});
+        });
         json(res, 200, {ok: true}); return;
       }
       const imageMatch = path.match(/^\/images\/([a-f0-9-]+)$/);
@@ -88,7 +96,7 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
         res.writeHead(200, {'Content-Type': original.contentType, 'X-Content-Type-Options': 'nosniff'});
         res.end(original.bytes); return;
       }
-      const assets = {'/': 'index.html', '/index.html': 'index.html', '/client.js': 'client.js', '/review-client.js': 'review-client.js', '/styles.css': 'styles.css'};
+      const assets = {'/': 'index.html', '/index.html': 'index.html', '/client.js': 'client.js', '/intake-command-client.js': 'intake-command-client.js', '/review-client.js': 'review-client.js', '/styles.css': 'styles.css'};
       if (req.method === 'GET' && assets[path]) {
         const file = assets[path], bytes = await readFile(resolve(appDir, file));
         const contentType = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8'}[file.slice(file.lastIndexOf('.'))] || 'text/html; charset=utf-8';
@@ -111,20 +119,21 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
     work.then(() => requests.delete(work), () => requests.delete(work));
   });
   return {
-    server, imports, review,
+    server, imports, review, intake,
     close() {
       if (closePromise) return closePromise;
       closing = true;
       closePromise = (async () => {
         const drained = server.listening ? new Promise(resolve => server.close(resolve)) : Promise.resolve();
         const importsDone = imports.close();
+        const intakeDone = intake.close();
         client.close();
         const timer = setTimeout(() => server.closeAllConnections(), shutdownTimeoutMs);
         try { await drained; } finally { clearTimeout(timer); }
         // Closed sockets can still have file writes in flight; finish handlers
         // before the caller closes their shared SQLite connection.
         await Promise.allSettled([...requests]);
-        await Promise.all([importsDone, review.idle()]);
+        await Promise.all([importsDone, intakeDone, review.idle()]);
       })();
       return closePromise;
     },
