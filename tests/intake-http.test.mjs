@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {testDirectory, png} from './helpers.mjs';
 import {createIntakeServer} from '../app/intake-http.mjs';
 import {createNotebook} from '../app/http-app.mjs';
+import {questionPage, answerPage} from './intake-extraction-fixtures.mjs';
 
 const q = (question = '计算 1+1', extra = {}) => ({number: '1', subject: '数学', question, studentAnswer: '', knowledgePoint: '加法', observedError: '', possibleCause: '', needsConfirmation: false, completeness: 'complete', answerStatus: 'unanswered', ...extra});
 async function setup(t, responses = {}, factory = createIntakeServer) {
@@ -262,4 +263,40 @@ test('confirming a re-encoded answer sheet as a duplicate adds provenance withou
   await app.request('/api/intake/decisions/' + d.id, 'POST', {action: 'skip', photoId: first.photos[0].id});
   const question = (await app.request('/api/intake/questions/' + first.questions[0].id)).data;
   assert.equal(question.attempts.length, 1); assert.equal(question.attempts[0].sources.length, 2);
+});
+
+test('actual synthetic question-page extraction does not invent attempts from unclear absence of an answer sheet', async t => {
+  const app = await setup(t, {questions: questionPage});
+  const batch = await app.settle((await app.upload(['questions'])).id);
+  assert.equal(batch.questions.length, 2);
+  assert.equal(batch.questions.every(q => q.attempts.length === 0 && q.latestStatus === 'no_answer'), true);
+});
+
+test('actual synthetic question and answer extractions associate by visible document identity despite model key order', async t => {
+  const app = await setup(t, {questions: questionPage, answers: answerPage});
+  const batch = await app.settle((await app.upload(['answers','questions'])).id);
+  assert.equal(batch.state, 'completed'); assert.equal(batch.warnings.length, 0);
+  assert.equal(batch.questions.length, 2); assert.equal(batch.questions.every(q => q.attempts.length === 1), true);
+  const wrong = batch.questions.find(q => q.content.number === '1');
+  assert.equal(wrong.attempts[0].studentAnswer, '12'); assert.equal(wrong.latestStatus, 'incorrect');
+  assert.equal(wrong.attempts[0].teacherReview.mark, 'incorrect');
+  assert.equal(wrong.attempts[0].aiAssessment.verdict, 'uncertain');
+});
+
+test('visible unreadable handwriting is retained only with positive answer evidence, not an unclear flag alone', async t => {
+  const app = await setup(t, {unclear: {questions: [q('辨认原作答1', {answerStatus: 'unclear', answerPresence: 'present', answerEvidence: '答案框内可见铅笔数字笔画但无法辨认', teacherReview: {mark: 'unmarked', evidence: '未见老师批改'}}), q('辨认原作答2', {number: '2', answerStatus: 'unclear', answerPresence: 'unknown', answerEvidence: '', teacherReview: {mark: 'unmarked', evidence: '未见老师批改'}})]}});
+  const batch = await app.settle((await app.upload(['unclear'])).id);
+  const visible = batch.questions.find(q => q.content.number === '1'), absent = batch.questions.find(q => q.content.number === '2');
+  assert.equal(visible.attempts.length, 1); assert.equal(visible.latestStatus, 'pending');
+  assert.equal(visible.attempts[0].answerEvidence, '答案框内可见铅笔数字笔画但无法辨认');
+  assert.equal(absent.attempts.length, 0);
+});
+
+test('different visible document IDs cannot be overridden by equal titles, question numbers or similar model match keys', async t => {
+  const otherAnswers = structuredClone(answerPage);
+  otherAnswers.paper.documentId = 'MIDO-13579'; otherAnswers.pageMarker = '合成数学练习 B · 编号 MIDO-13579 · 答题纸';
+  const app = await setup(t, {questions: questionPage, answers: otherAnswers});
+  const batch = await app.settle((await app.upload(['questions','answers'])).id);
+  assert.equal(batch.state, 'attention'); assert.equal(batch.questions.every(q => q.attempts.length === 0), true);
+  assert.equal(batch.fragments.every(f => f.state === 'unlinked'), true);
 });

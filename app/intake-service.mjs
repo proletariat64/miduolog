@@ -2,16 +2,15 @@ import {randomUUID} from 'node:crypto';
 import {mkdir, readFile} from 'node:fs/promises';
 import {resolve, basename} from 'node:path';
 import {IntakeStore, digest, now, parse} from './intake-store.mjs';
-import {intakeRecognitionSchema, validateExtraction, questionContent, string} from './intake-records.mjs';
+import {intakeRecognitionSchema, validateExtraction, questionContent, string, hasVisibleAnswer, sameVisibleDocument, questionNumber} from './intake-records.mjs';
 import {imageType} from './paper-import.mjs';
 import {writeImage} from './local-images.mjs';
 import * as matching from './intake-matching.mjs';
 
 const encode = JSON.stringify;
 const active = ['saving', 'queued', 'processing'];
-const hasAnswer = raw => !!raw.studentAnswer?.trim() || ['answered', 'unclear'].includes(raw.answerStatus);
+const hasAnswer = hasVisibleAnswer;
 const error = (message, status = 400) => Object.assign(new Error(message), {status});
-const key = value => String(value || '').normalize('NFKC').replace(/\s+/g, '').trim();
 
 export class IntakeService {
   static async open(options) {
@@ -176,18 +175,19 @@ export class IntakeService {
     const materials = (content.materialIds || []).map(id => this.store.material(id)).filter(Boolean).map(m => ({text: m.text, description: m.description}));
     return {...content, sharedMaterial: materials.length ? {inline: content.sharedMaterial || '', materials} : content.sharedMaterial};
   }
-  batchQuestionMatches(batchId, fragment) {
+  batchQuestionMatches(batchId, fragment, fragmentPhotoId) {
     const rows = this.db.prepare('SELECT * FROM intake_occurrences WHERE batchId=? AND questionId IS NOT NULL').all(batchId), matches = new Set();
-    if (!key(fragment.matchKey)) return [];
+    const fragmentExtraction = this.store.photo(fragmentPhotoId)?.extraction;
+    if (!questionNumber(fragment.number)) return [];
     for (const row of rows) {
       const photo = this.store.photo(row.photoId), raw = photo?.extraction?.questions[row.indexNo];
-      if (raw && key(raw.matchKey) === key(fragment.matchKey) && key(raw.number) === key(fragment.number)) matches.add(row.questionId);
+      if (raw && questionNumber(raw.number) === questionNumber(fragment.number) && sameVisibleDocument(photo.extraction, raw, fragmentExtraction, fragment)) matches.add(row.questionId);
     }
     return [...matches];
   }
   matchFragments(batchId, photos) {
     for (const row of this.db.prepare("SELECT * FROM intake_fragments WHERE batchId=? AND state='unlinked'").all(batchId)) {
-      const raw = parse(row.data), matches = this.batchQuestionMatches(batchId, raw);
+      const raw = parse(row.data), matches = this.batchQuestionMatches(batchId, raw, row.photoId);
       if (matches.length === 1) this.attachFragment(row, matches[0]);
       else {
         const waiting = photos.some(p => ['attention','failed'].includes(p.state)) || this.db.prepare("SELECT id FROM intake_decisions WHERE batchId=? AND state='pending' LIMIT 1").get(batchId);
