@@ -69,6 +69,7 @@ test('code examples are not mistaken for live Markdown links', () => {
   const files = fixture();
   files['README.md'] += '\n```md\n[example](missing.md)\n```\n';
   files['README.md'] += '\nSyntax example: `[label][reference]`.\n';
+  files['README.md'] += '\n- Syntax example: `[label][reference]`.\n';
   assert.deepEqual(audit(files), []);
 });
 
@@ -104,4 +105,13 @@ test('relative repository-root links work at root and in nested documents', () =
   files['README.md'] += '\n[root](./)\n';
   files['docs/index.md'] += '\n[root](../)\n';
   assert.deepEqual(audit(files), []);
+});
+
+test('npm script names are compared in full, including dots and quoted names', () => {
+  const files = fixture();
+  files['package.json'] = JSON.stringify({scripts: {'test.unit': 'node --test', 'test unit': 'node --test'}});
+  files['README.md'] += '\n```sh\nnpm run test.unit\nnpm run "test unit"\n```\n';
+  assert.deepEqual(audit(files), []);
+  files['README.md'] += '\n`npm run test.unit.missing`\n';
+  assert.ok(audit(files).some(error => error.includes('npm script 不存在：test.unit.missing')));
 });

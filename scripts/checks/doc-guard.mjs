@@ -38,8 +38,9 @@ export function auditRepository({files, read, policy}) {
     if (inventory.has(target) && target.endsWith('.md')) edges.get(file)?.add(target);
   }
   function checkCommands(file, text) {
-    for (const match of text.matchAll(/\bnpm\s+run\s+([a-zA-Z0-9:_-]+)/g)) {
-      if (!Object.hasOwn(packageJson.scripts ?? {}, match[1])) report(file, `npm script 不存在：${match[1]}`);
+    for (const match of text.matchAll(/\bnpm\s+run\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/g)) {
+      const name = match[1] ?? match[2] ?? match[3];
+      if (!Object.hasOwn(packageJson.scripts ?? {}, name)) report(file, `npm script 不存在：${name}`);
     }
     for (const match of text.matchAll(/\b(?:node|python|python3)\s+((?:scripts|app)\/[^\s`'";]+)/g)) {
       checkTarget(file, match[1], '.');
@@ -62,7 +63,7 @@ export function auditRepository({files, read, policy}) {
         for (const match of token.text.matchAll(/(?:href|src)\s*=\s*["']([^"']+)["']/g)) checkTarget(file, match[1]);
       }
       // Missing reference definitions remain text; code spans are not links.
-      if (token.type === 'text' && /\[[^\]]+\]\[[^\]]*\]/.test(token.raw)) {
+      if (token.type === 'text' && !token.tokens?.length && /\[[^\]]+\]\[[^\]]*\]/.test(token.raw)) {
         const refs = [...token.raw.matchAll(/\[([^\]]+)\]\[([^\]]*)\]/g)];
         for (const [, label, reference] of refs) {
           const key = (reference || label).replace(/\s+/g, ' ').toLowerCase();
