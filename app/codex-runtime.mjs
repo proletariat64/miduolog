@@ -191,7 +191,11 @@ export class CodexRuntime {
         const p = message.params || {};
         if (message.method === 'client/error') { finish(new Error(p.message)); return; }
         if (p.threadId !== threadId) return;
-        if (message.method === 'item/agentMessage/delta') onProgress(p.delta || '');
+        if (message.method === 'item/agentMessage/delta') {
+          try { onProgress(p.delta || ''); }
+          catch (error) { shouldInterrupt = true; interrupt(); finish(error); }
+          return;
+        }
         if (message.method === 'item/completed' && p.item?.type === 'agentMessage' &&
             (!p.item.phase || p.item.phase === 'final_answer')) text = p.item.text;
         if (message.method !== 'turn/completed') return;

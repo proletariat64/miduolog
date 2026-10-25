@@ -152,3 +152,19 @@ for (const mode of ['rejected', 'unanswered']) test('failed interrupt disposes a
   await until(() => child.killed);
   assert.equal(client.child, null);
 });
+
+test('a throwing progress callback fails only its own call and interrupts its turn', async t => {
+  const child = new FakeCodexProcess(), client = new CodexClient({processFactory: () => child});
+  t.after(() => client.close());
+  const failure = client.runJson({...input('callback'), onProgress: () => { throw new Error('progress failed'); }});
+  const rejected = assert.rejects(failure, /progress failed/);
+  const kept = client.runJson(input('kept'));
+  await until(() => child.turns.length === 2);
+  const failedTurn = child.turns.find(turn => turn.params.input[0].text === 'callback');
+  child.output({method: 'item/agentMessage/delta', params: {threadId: failedTurn.params.threadId, delta: 'progress'}});
+  await rejected;
+  child.complete(child.turns.find(turn => turn !== failedTurn), {label: 'kept'});
+  assert.equal((await kept).data.label, 'kept');
+  await until(() => child.requests.some(request => request.method === 'turn/interrupt'));
+  assert.equal(child.killed, false);
+});

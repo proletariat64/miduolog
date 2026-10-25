@@ -177,22 +177,33 @@ export class PaperImports {
             if (typeof q[field] !== 'string') throw new Error('识别结果格式不完整');
           }
         }
-        this.db.exec('BEGIN IMMEDIATE');
-        try {
-          const current = this.db.prepare("SELECT id FROM imports WHERE id=? AND state='processing' AND workToken=?").get(row.id, token);
-          if (current) {
-            for (const q of data.questions) {
-              this.db.prepare('INSERT INTO questions(id,importId,state,content,createdAt) VALUES (?,?,?,?,?)')
-                .run(randomUUID(), row.id, 'pending', JSON.stringify({...q, causeStatus: 'pending', unclear: data.unclear || []}), new Date().toISOString());
+        await this.withWriteRetry(() => {
+          this.db.exec('BEGIN IMMEDIATE');
+          try {
+            const current = this.db.prepare("SELECT id FROM imports WHERE id=? AND state='processing' AND workToken=?").get(row.id, token);
+            if (current) {
+              for (const q of data.questions) {
+                this.db.prepare('INSERT INTO questions(id,importId,state,content,createdAt) VALUES (?,?,?,?,?)')
+                  .run(randomUUID(), row.id, 'pending', JSON.stringify({...q, causeStatus: 'pending', unclear: data.unclear || []}), new Date().toISOString());
+              }
+              this.db.prepare("UPDATE imports SET state='completed',workToken=NULL,error=NULL WHERE id=?").run(row.id);
             }
-            this.db.prepare("UPDATE imports SET state='completed',workToken=NULL,error=NULL WHERE id=?").run(row.id);
-          }
-          this.db.exec('COMMIT');
-        } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+            this.db.exec('COMMIT');
+          } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+        });
       } catch (error) {
-        this.db.prepare("UPDATE imports SET state='failed',workToken=NULL,error=? WHERE id=? AND state='processing' AND workToken=?")
-          .run(error.message, row.id, token);
+        await this.withWriteRetry(() => this.db.prepare("UPDATE imports SET state='failed',workToken=NULL,error=? WHERE id=? AND state='processing' AND workToken=?")
+          .run(error.message, row.id, token));
       }
+    }
+  }
+
+  async withWriteRetry(write) {
+    while (!this.closed) {
+      try { return write(); }
+      catch (error) { if (![5, 6].includes(error.errcode & 255)) throw error; }
+      // Retain the inference response in memory and retry only persistence.
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
 

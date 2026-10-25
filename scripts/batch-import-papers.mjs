@@ -24,7 +24,7 @@ if(!run)process.exit(0);
 const reportFolder=resolve('.scratch/mistake-notebook/real-paper');await mkdir(reportFolder,{recursive:true});
 const report={startedAt:new Date().toISOString(),directory:folder,files:[],newQuestionIds:[]};
 const reportPath=resolve(reportFolder,'batch-import-result.json');
-const beforeIds=new Set((await api('/api/questions')).map(q=>q.id));
+const before=await api('/api/questions'),beforeIds=new Set(before.map(q=>q.id));
 async function save(){await writeFile(reportPath,JSON.stringify(report,null,2),'utf8');}
 const waitFor=id=>waitForImport(()=>api('/api/jobs/'+id),{onProgress:message=>console.log('  '+message)});
 for(let i=0;i<plan.length;i++){
@@ -60,7 +60,10 @@ for(let i=0;i<plan.length;i++){
 }
 const after=await api('/api/questions'),afterIds=new Set(after.map(q=>q.id));
 assert.equal([...beforeIds].every(id=>afterIds.has(id)),true,'已有题目不能丢失');
+// Users may edit questions while the batch runs; expose those changes rather
+// than claim unchanged contents or reject legitimate concurrent edits.
+report.priorQuestionChanges=before.filter(old=>JSON.stringify(after.find(q=>q.id===old.id))!==JSON.stringify(old)).map(q=>q.id);
 report.finishedAt=new Date().toISOString();
-report.summary={total:plan.length,skipped:report.files.filter(f=>f.status==='skipped').length,completed:report.files.filter(f=>f.status==='completed').length,unfinished:report.files.filter(f=>f.status==='unfinished').length,failed:report.files.filter(f=>f.status==='failed').length,newQuestions:new Set(report.newQuestionIds).size,allNewPending:report.newQuestionIds.every(id=>after.find(q=>q.id===id)?.state==='pending'),priorQuestionsPreserved:true};
+report.summary={total:plan.length,skipped:report.files.filter(f=>f.status==='skipped').length,completed:report.files.filter(f=>f.status==='completed').length,unfinished:report.files.filter(f=>f.status==='unfinished').length,failed:report.files.filter(f=>f.status==='failed').length,newQuestions:new Set(report.newQuestionIds).size,allNewPending:report.newQuestionIds.every(id=>after.find(q=>q.id===id)?.state==='pending'),priorQuestionIdsPreserved:true,priorQuestionChanges:report.priorQuestionChanges.length};
 await save();console.log('批量结果：'+JSON.stringify(report.summary));console.log('报告：'+reportPath);
 if(report.summary.failed||report.summary.unfinished)process.exitCode=1;

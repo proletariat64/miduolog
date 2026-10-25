@@ -138,3 +138,25 @@ test('a SQLite write lock leaves queued work recoverable and backs off before re
   locker.exec('ROLLBACK'); await papers.idle();
   assert.equal(papers.get('queued').stage, 'completed'); assert.equal(calls, 1);
 });
+
+for (const failed of [false, true]) test('a write lock during model completion retries storage without inference replay: ' + failed, async t => {
+  let db, locker, papers;
+  t.after(async () => { if (locker?.isTransaction) locker.exec('ROLLBACK'); await papers?.close(); locker?.close(); db?.close(); });
+  const dataDir = await testDirectory(t), path = join(dataDir, 'notebook.sqlite'), response = deferred();
+  db = new DatabaseSync(path); db.exec('PRAGMA journal_mode=WAL');
+  let calls = 0;
+  papers = await PaperImports.open({db, dataDir, client: {recognize: async () => {
+    calls++; return calls === 1 ? response.promise : recognition('second result');
+  }}});
+  const first = await papers.submit({bytes: png('first-locked'), name: 'first.png'});
+  const second = await papers.submit({bytes: png('second-locked'), name: 'second.png'});
+  await until(() => calls === 1);
+  locker = new DatabaseSync(path); locker.exec('BEGIN IMMEDIATE');
+  if (failed) response.reject(new Error('model failed')); else response.resolve(recognition('retained result'));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(papers.get(first.id).stage, 'processing'); assert.equal(calls, 1);
+  locker.exec('ROLLBACK'); await papers.idle();
+  assert.equal(papers.get(first.id).stage, failed ? 'failed' : 'completed');
+  if (!failed) assert.equal(papers.questions(first.id)[0].content.question, 'retained result');
+  assert.equal(papers.get(second.id).stage, 'completed'); assert.equal(calls, 2);
+});
