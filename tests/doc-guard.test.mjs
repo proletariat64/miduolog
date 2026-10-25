@@ -25,6 +25,7 @@ test('valid structure, reference links, encoded filenames and external links pas
   files['README.md'] += '\n[guide][g]\n\n[g]: docs/%67lossary.md "Glossary"\n\n[web](https://example.org)\n';
   files['README.md'] += '\n```sh\nnpm run docs:check\n```\n';
   files['scripts/operations/backup-database.mjs'] = '';
+  files['config/vision-requirements.txt'] = 'Pillow==12.1.1';
   assert.deepEqual(audit(files), []);
 });
 

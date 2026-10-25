@@ -2,10 +2,11 @@ import {readFile,readdir,writeFile,mkdir} from 'node:fs/promises';
 import {resolve,extname} from 'node:path';
 import assert from 'node:assert/strict';
 import {waitForImport} from '../lib/poll-import.mjs';
+import {localServiceUrl} from '../lib/worktree-environment.mjs';
 
 const folder=resolve(process.argv[2]||'');
 if(!process.argv[2])throw new Error('请提供试卷目录');
-const run=process.argv.includes('--run'),base=process.env.MIDO_URL||'http://127.0.0.1:4318';
+const run=process.argv.includes('--run'),base=await localServiceUrl(resolve('.'));
 async function api(path,options={}){
   const response=await fetch(base+path,{signal:AbortSignal.timeout(30000),...options,headers:{'Content-Type':'application/json','X-Mido-Client':'desktop',...options.headers}});
   const data=await response.json();

@@ -9,7 +9,7 @@
 | 根目录 | 项目入口 README、代理指令 AGENTS、包管理与工具入口配置、桌面启动器 |
 | app/ | 正式应用的服务端和浏览器实现 |
 | docs/ | 长期维护的产品、架构、开发和术语文档；index.md 是总入口 |
-| config/ | 仓库检查的声明式规则 |
+| config/ | 仓库检查的声明式规则、按用途命名的 Python 依赖清单（用途-requirements.txt） |
 | scripts/checks/ | 离线、可重复执行的质量检查入口 |
 | scripts/operations/ | 接受用户输入的导入等维护命令，从仓库根目录运行 |
 | scripts/verification/ | 需要本机模型或数据的手动验证，从仓库根目录运行，不进入自动测试 |

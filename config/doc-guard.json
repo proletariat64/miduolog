@@ -4,7 +4,7 @@
     "^(README\\.md|AGENTS\\.md|package(-lock)?\\.json|eslint\\.config\\.mjs|start-notebook\\.cmd|\\.gitignore)$",
     "^app/([a-z0-9]+(-[a-z0-9]+)*/)*[a-z0-9]+(-[a-z0-9]+)*\\.(mjs|js|html|css)$",
     "^docs/([a-z0-9]+(-[a-z0-9]+)*/)*[a-z0-9]+(-[a-z0-9]+)*\\.md$",
-    "^config/[a-z0-9]+(-[a-z0-9]+)*\\.json$",
+    "^config/([a-z0-9]+(-[a-z0-9]+)*\\.json|[a-z0-9]+(-[a-z0-9]+)*-requirements\\.txt)$",
     "^scripts/(checks|operations|verification|lib)/[a-z0-9]+(-[a-z0-9]+)*\\.(mjs|py)$",
     "^tests/[a-z0-9]+(-[a-z0-9]+)*(\\.test)?\\.mjs$",
     "^prototypes/[a-z0-9]+(-[a-z0-9]+)*/(index\\.html|[a-z0-9]+(-[a-z0-9]+)*\\.(js|css))$",

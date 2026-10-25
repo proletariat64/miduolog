@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-const base = process.env.MIDO_URL || 'http://127.0.0.1:4318';
+import {localServiceUrl} from '../lib/worktree-environment.mjs';
+const base = await localServiceUrl(process.cwd());
 async function get(path) { const r = await fetch(base + path); assert.equal(r.ok, true); return r.json(); }
 const fingerprint = imports => JSON.stringify(imports.map(({id, state, count}) => ({id, state, count})));
 async function collect() {

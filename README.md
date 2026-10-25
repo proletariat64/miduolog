@@ -18,6 +18,8 @@
 
 首次运行先执行 `npm ci` 安装锁定版本的开发工具。
 
+多 worktree 开发先执行 `npm run bootstrap`，再用 `npm run dev` 启动独立端口，详见 [Worktree 初始化](docs/worktrees.md)。
+
 双击 `start-notebook.cmd`，或在此目录运行：
 
 ```sh
