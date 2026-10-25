@@ -27,27 +27,24 @@ setInterval(updateElapsed,1000);
 function updateTask(changes){
   importTask={...importTask,...changes};const t=importTask;feedback.hidden=view==='review';feedback.dataset.phase=t.phase;
   working=!['completed','failed','unconfirmed'].includes(t.phase);$('open').disabled=working;
-  const titles={reading:'图片已选中，正在读取',uploading:'正在上传图片到本机',processing:'原图已保存，Codex 正在识别',reconnecting:'暂时无法读取识别进度',connectionLost:'连接暂时中断，请检查进度',completed:t.count?'识别完成 · '+t.count+' 道题待核对':'识别完成 · 未找到题目',failed:'本次识别未完成',unconfirmed:'上传结果尚未确认'};
+  const titles={reading:'图片已选中，正在读取',uploading:'正在上传图片到本机',saving:'正在保存原图',queued:'原图已保存，排队等待识别',processing:'原图已保存，Codex 正在识别',reconnecting:'暂时无法读取识别进度',connectionLost:'连接暂时中断，请检查进度',completed:t.count?'识别完成 · '+t.count+' 道题待核对':'识别完成 · 未找到题目',failed:'本次识别未完成',unconfirmed:'上传结果尚未确认'};
   $('feedbackTitle').textContent=titles[t.phase];$('feedbackFile').textContent=t.name+(t.size?' · '+(t.size/1024/1024).toFixed(2)+' MB':'');$('feedbackMessage').textContent=t.message||'';
   $('progress').textContent=titles[t.phase];$('open').textContent=working?'正在处理本次图片…':'＋ 打开图片并识别';
   const src=previewUrl||(t.id?'/images/'+t.id:'');$('feedbackImage').hidden=!src;if(src&&$('feedbackImage').getAttribute('src')!==src)$('feedbackImage').src=src;
   const step=t.phase==='reading'?0:t.phase==='uploading'||t.phase==='unconfirmed'?1:t.phase==='completed'?3:2;
   feedback.querySelectorAll('.import-steps li').forEach((el,i)=>{el.className=i<step?'done':i===step?'current':'';if(i===step)el.setAttribute('aria-current','step');else el.removeAttribute('aria-current');});
   $('feedbackMeter').hidden=t.phase!=='uploading';if(t.percent==null)$('feedbackMeter').removeAttribute('value');else $('feedbackMeter').value=t.percent;
-  $('feedbackHint').textContent=['processing','reconnecting','connectionLost'].includes(t.phase)?'整页试卷或图形较多时可能需要几分钟，完成后自动显示题目数量。你可以继续查看已有题目。':t.phase==='completed'?'原图和结果已保存在本地。题目需核对后才进入复习库。':t.phase==='failed'&&t.id?'原图仍保存在本机，可重新选择图片重试。':'';
+  $('feedbackHint').textContent=['queued','processing','reconnecting','connectionLost'].includes(t.phase)?'整页试卷或图形较多时可能需要几分钟，完成后自动显示题目数量。你可以继续查看已有题目。':t.phase==='completed'?'原图和结果已保存在本地。题目需核对后才进入复习库。':t.phase==='failed'&&t.id?'原图仍保存在本机，可重新选择图片重试。':'';
   $('feedbackResults').hidden=t.phase!=='completed'||!t.count;$('feedbackCheck').hidden=t.phase!=='connectionLost';$('feedbackRefresh').hidden=t.phase!=='unconfirmed';
-  if(t.id){try{sessionStorage.setItem('mido-last-import',JSON.stringify({id:t.id,name:t.name,startedAt:t.startedAt,size:t.size,endedAt:t.endedAt}));}catch{}}
+  if(t.id){try{sessionStorage.setItem('mido-last-import',JSON.stringify({id:t.id,name:t.name,startedAt:t.startedAt,size:t.size,endedAt:t.endedAt}));}catch{/* Storage is optional; the server retains task state. */}}
   updateElapsed();
 }
-async function readJob(id){try{return await api('/api/jobs/'+id);}catch(error){
-  // 服务重启后内存任务可能不存在，使用已落盘的导入状态判断结果。
-  const rows=await api('/api/imports'),row=rows.find(item=>item.id===id);if(row?.state==='completed'){const list=await api('/api/questions');return {state:'completed',count:list.filter(q=>q.importId===id).length,message:'识别结果已保存。'};}if(row?.state==='failed')return {state:'failed',message:row.error||'识别未完成，原图仍保留。'};throw error;
-}}
+async function readJob(id){return api('/api/jobs/'+id,{signal:AbortSignal.timeout(20000)});}
 async function watchImport(id){const version=++watchVersion;let failures=0;
   while(version===watchVersion){try{const state=await readJob(id);if(version!==watchVersion)return;failures=0;
-    if(state.state==='processing'){updateTask({phase:'processing',message:state.message||'正在识别题目、原作答和可能错因……'});}
-    else{updateTask({phase:state.state==='completed'?'completed':'failed',count:state.count||0,message:state.message,endedAt:importTask.endedAt||Date.now()});try{await reload();if(!selected&&view!=='review'){view='pending';render();}}catch(error){$('feedbackMessage').textContent+=' 题目列表读取失败，请刷新页面查看。';}return;}
-  }catch(error){failures++;updateTask({phase:failures>=3?'connectionLost':'reconnecting',message:'暂时无法连接本机服务，后台可能仍在识别。无需重复上传。'});if(failures>=3)return;}
+    if(state.state==='processing'){updateTask({phase:({queued:'queued',saving:'saving'})[state.stage]||'processing',message:state.message||'正在识别题目、原作答和可能错因……'});}
+    else{updateTask({phase:state.state==='completed'?'completed':'failed',count:state.count||0,message:state.message,endedAt:importTask.endedAt||Date.now()});try{await reload();if(!selected&&view!=='review'){view='pending';render();}}catch{ $('feedbackMessage').textContent+=' 题目列表读取失败，请刷新页面查看。';}return;}
+  }catch{failures++;updateTask({phase:failures>=3?'connectionLost':'reconnecting',message:'暂时无法连接本机服务，后台可能仍在识别。无需重复上传。'});if(failures>=3)return;}
   await new Promise(resolve=>setTimeout(resolve,1500));
   }
 }
@@ -69,8 +66,8 @@ $('file').onchange=async()=>{
   finally{$('file').value='';}
 };
 render();try{await reload();render();}catch(error){notice(error.message,true);}
-let remembered=null;try{remembered=JSON.parse(sessionStorage.getItem('mido-last-import')||'null');}catch{}
+let remembered=null;try{remembered=JSON.parse(sessionStorage.getItem('mido-last-import')||'null');}catch{/* Storage is optional; the server retains task state. */}
 const processingImport=imports.find(item=>item.state==='processing');
 const last=processingImport||(remembered&&imports.find(item=>item.id===remembered.id));
-if(last){updateTask({id:last.id,name:last.originalName,size:remembered?.id===last.id?remembered.size:undefined,endedAt:last.state!=='processing'&&remembered?.id===last.id?remembered.endedAt:undefined,startedAt:new Date(last.createdAt).getTime(),phase:'processing',message:'正在读取上次识别的状态……'});void watchImport(last.id);}
+if(last){updateTask({id:last.id,name:last.originalName,size:remembered?.id===last.id?remembered.size:undefined,endedAt:last.state!=='processing'&&remembered?.id===last.id?remembered.endedAt:undefined,startedAt:new Date(last.startedAt||last.createdAt).getTime(),phase:'processing',message:'正在读取上次识别的状态……'});void watchImport(last.id);}
 try{const status=await api('/api/status');$('connection').textContent=status.loggedIn?'● 已登录 · '+status.authType:'需要登录 Codex';}catch(error){$('connection').textContent='连接失败';notice('无法连接 Codex：'+error.message,true);}

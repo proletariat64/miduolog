@@ -1,0 +1,40 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {DatabaseSync} from 'node:sqlite';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+import {mkdir, readFile, writeFile, stat} from 'node:fs/promises';
+import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {testDirectory, png} from './helpers.mjs';
+
+const run = promisify(execFile);
+const script = fileURLToPath(new URL('../scripts/verify-architecture-data.mjs', import.meta.url));
+
+test('snapshot and verification preserve file-backed WAL rows and image digests', async t => {
+  let db;
+  t.after(() => db?.close());
+  const cwd = await testDirectory(t);
+  await mkdir(join(cwd, 'data/images'), {recursive: true});
+  await writeFile(join(cwd, 'data/images/paper.png'), png('snapshot'));
+  const path = join(cwd, 'data/notebook.sqlite');
+  db = new DatabaseSync(path);
+  db.exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0;
+    CREATE TABLE imports(id TEXT,state TEXT);
+    CREATE TABLE questions(id TEXT,content TEXT);
+    CREATE TABLE review_sessions(id TEXT);
+    CREATE TABLE review_items(id TEXT,state TEXT,answer TEXT);
+    CREATE TABLE review_disputes(itemId TEXT);
+    INSERT INTO imports VALUES ('paper','completed');
+    INSERT INTO questions VALUES ('question','original content');
+    INSERT INTO review_items VALUES ('answer','graded','saved answer');`);
+  assert.ok((await stat(path + '-wal')).size > 32, 'committed rows must still be in WAL');
+  const snapshot = await run(process.execPath, [script, '--snapshot'], {cwd, timeout: 10000});
+  const {backupPath} = JSON.parse(snapshot.stdout);
+  const copied = new DatabaseSync(backupPath, {readOnly: true});
+  assert.equal(copied.prepare('SELECT answer FROM review_items').get().answer, 'saved answer'); copied.close();
+  const result = await run(process.execPath, [script], {cwd, timeout: 10000});
+  assert.match(result.stdout, /PASS/);
+  const baseline = JSON.parse(await readFile(join(cwd, '.scratch/mistake-notebook/architecture/baseline.json'), 'utf8'));
+  assert.equal(baseline.rows.questions[0].content, 'original content');
+});

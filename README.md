@@ -16,6 +16,8 @@
 
 本机需要 Node.js 24 或以上，以及已经登录的 Codex CLI。
 
+首次运行先执行 `npm ci` 安装锁定版本的开发工具。
+
 双击 `start-notebook.cmd`，或在此目录运行：
 
 ```sh
@@ -28,7 +30,17 @@ npm start
 
 原图位于 `data/images/`，题目和复习状态位于 `data/notebook.sqlite`，均留在本机；识别与批阅时相关题目、作答或图片会发送给 Codex 模型服务。数据库和图片均不进入 Git。真实导入题目与最初的合成测试作业分别保留，合成试题不进入默认复习推荐。
 
+本地试卷样本统一放在 `samples/papers/`。`data/`（含 SQLite 的 WAL、SHM 文件）和整个 `samples/` 目录均加入 `.gitignore`；复制到其他电脑时，需单独迁移这些本地文件。目录外的原始图片不移动。
+
 ## 验证
+
+```sh
+npm run check
+```
+
+隔离测试覆盖导入去重与恢复、Codex 调用生命周期、复习并发提交及真实 HTTP 入口，不调用模型或修改本地真实数据。架构说明见 [docs/architecture.md](docs/architecture.md)，业务用语见 [GLOSSARY.md](GLOSSARY.md)。
+
+`npm run check` 顺序运行 ESLint 和测试；也可单独使用 `npm run lint` 或 `npm test`。GitHub Actions 在 Windows、Linux 的 Node.js 24 环境中执行同样的检查。开发到 PR 的流程见 [docs/development.md](docs/development.md)。
 
 ```sh
 python scripts/make-vision-fixture.py
@@ -36,6 +48,15 @@ npm run verify:codex
 ```
 
 生成图片仅依赖测试环境的 Pillow。验证通过本地图片输入，检查页面标记、数学与语文两题拆分、学生原作答和结构化分析。测试题文字与页面标记没有放进模型的文字提示中。
+
+目录批处理通过运行中的错题本执行：
+
+```sh
+node scripts/batch-import-papers.mjs samples/papers --plan
+node scripts/batch-import-papers.mjs samples/papers --run
+```
+
+`--plan` 只向本机检查图片是否已导入，不调用模型；`--run` 复用相同内容的任务并将新结果放入待核对区。浏览器与批处理使用同一套去重及恢复规则。
 
 ## 当前边界
 

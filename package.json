@@ -5,8 +5,17 @@
   "type": "module",
   "scripts": {
     "start": "node app/server.mjs",
-    "test": "node scripts/test-review.mjs",
-    "verify:codex": "node scripts/verify-codex.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "verify:codex": "node scripts/verify-codex.mjs",
+    "lint": "eslint . --max-warnings 0",
+    "check": "npm run lint && npm test"
   },
-  "engines": { "node": ">=24" }
+  "engines": {
+    "node": ">=24"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.13.0",
+    "globals": "^17.13.0"
+  }
 }

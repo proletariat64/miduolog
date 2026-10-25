@@ -18,7 +18,7 @@ export class ReviewUI{
   async poll(id,mode){const version=++this.pollVersion;this.disable(true);let failures=0;const start=Date.now();
     while(this.active()&&version===this.pollVersion){const work=document.getElementById('reviewWork');if(work)work.innerHTML='<div class="notice" role="status">'+(mode==='hinting'?'Codex 正在准备提示':'作答已保存，Codex 正在批阅')+' · 已等待 '+Math.floor((Date.now()-start)/1000)+' 秒<br>你可以稍后从复习记录继续查看。</div>';
       try{const item=await this.api('/api/review/items/'+id);if(!this.active()||version!==this.pollVersion)return;failures=0;Object.assign(this.current(),item);if(!['grading','hinting'].includes(item.state)){if(item.state==='graded')this.feedback(item);else{this.question();}return;}}
-      catch(error){failures++;if(failures>=3){if(work)work.innerHTML='<div class="notice error">暂时无法读取处理进度，后台可能仍在继续。无需重复提交。</div><button data-r="recheck">重新检查进度</button>';return;}}
+      catch{failures++;if(failures>=3){if(work)work.innerHTML='<div class="notice error">暂时无法读取处理进度，后台可能仍在继续。无需重复提交。</div><button data-r="recheck">重新检查进度</button>';return;}}
       await new Promise(resolve=>setTimeout(resolve,1500));
     }
   }
