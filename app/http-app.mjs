@@ -4,6 +4,8 @@ import {resolve, dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {PaperImports, imageType} from './paper-import.mjs';
 import {ReviewService} from './review-service.mjs';
+import {IntakeService} from './intake-service.mjs';
+import {createIntakeHandler} from './intake-http.mjs';
 
 const appDir = dirname(fileURLToPath(import.meta.url));
 function json(res, status, data) {
@@ -29,7 +31,9 @@ function uploadedBytes(input) {
 export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3000}) {
   db.exec('PRAGMA journal_mode=WAL');
   const imports = await PaperImports.open({db, client, dataDir});
-  const review = new ReviewService({db, client, dataDir, imageType});
+  const intake = await IntakeService.open({db, client, dataDir});
+  const intakeHandle = createIntakeHandler(intake);
+  const review = new ReviewService({db, client, dataDir, imageType, catalog: intake});
   let closing = false, closePromise;
   const requests = new Set();
   async function handle(req, res) {
@@ -45,6 +49,7 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
         json(res, 403, {error: '请求来源不匹配'}); return;
       }
       if (path.startsWith('/api/review/')) { await review.handle(req, res, path, {body, json}); return; }
+      if (await intakeHandle(req, res, url)) return;
       if (req.method === 'GET' && path === '/api/status') {
         const account = await client.request('account/read', {refreshToken: false});
         json(res, 200, {loggedIn: !!account.account, authType: account.account?.type || null, busy: imports.busy}); return;
@@ -79,6 +84,7 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
         const state = input.state === 'library' ? 'library' : previous.state;
         if (!content.question.trim()) { json(res, 400, {error: '题目不能为空'}); return; }
         db.prepare('UPDATE questions SET state=?,content=? WHERE id=?').run(state, JSON.stringify(content), previous.id);
+        intake.syncLegacyQuestion(previous.id);
         json(res, 200, {ok: true}); return;
       }
       const imageMatch = path.match(/^\/images\/([a-f0-9-]+)$/);
@@ -111,20 +117,21 @@ export async function createNotebook({db, client, dataDir, shutdownTimeoutMs = 3
     work.then(() => requests.delete(work), () => requests.delete(work));
   });
   return {
-    server, imports, review,
+    server, imports, review, intake,
     close() {
       if (closePromise) return closePromise;
       closing = true;
       closePromise = (async () => {
         const drained = server.listening ? new Promise(resolve => server.close(resolve)) : Promise.resolve();
         const importsDone = imports.close();
+        const intakeDone = intake.close();
         client.close();
         const timer = setTimeout(() => server.closeAllConnections(), shutdownTimeoutMs);
         try { await drained; } finally { clearTimeout(timer); }
         // Closed sockets can still have file writes in flight; finish handlers
         // before the caller closes their shared SQLite connection.
         await Promise.allSettled([...requests]);
-        await Promise.all([importsDone, review.idle()]);
+        await Promise.all([importsDone, intakeDone, review.idle()]);
       })();
       return closePromise;
     },
