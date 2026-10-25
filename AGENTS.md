@@ -4,6 +4,8 @@
 
 新增、迁移文件或修改行为、命令、业务术语前，阅读[目录组织与文档维护](docs/repository-structure.md)。同步对应文档并通过 `npm run check`；按职责迁移不合规文件，不为旧布局添加例外。业务术语见[术语表](docs/glossary.md)。
 
+初始化新 worktree 时按[Worktree 初始化](docs/worktrees.md)执行 `npm run bootstrap`，多实例开发使用 `npm run dev`；本地数据与依赖保持各工作区独立。
+
 ## OCR CLI 授权
 
 用户于 2026-10-25 授权：在本仓库执行代码审查或本地 CI 时，可以使用 `ocr`（OpenCodeReview）CLI，将本仓库代码差异及审查所需的源码上下文发送给 OCR 当前配置的模型服务，无需逐次确认。报告保存在本地 Git 忽略目录 `.scratch/local-ci/`；此授权范围为源码审查，真实试卷、图片、本地数据库和凭据不作为审查材料发送。
