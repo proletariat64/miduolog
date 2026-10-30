@@ -40,8 +40,9 @@ export function createIntakeHandler(intake) {
       }
       if (resource === 'photos' && method === 'GET' && (!action || action === 'image')) {
         if (action === 'image') {
-          const original = await intake.original(id); if (!original) { json(null); return true; }
-          res.writeHead(200, {'Content-Type': original.contentType, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'no-store'}); res.end(original.bytes);
+          const preview = url.searchParams.get('preview') === '1';
+          const original = await intake.original(id, {preview}); if (!original) { json(null); return true; }
+          res.writeHead(200, {'Content-Type': original.contentType, 'X-Content-Type-Options': 'nosniff', 'Cache-Control': preview ? 'private, max-age=86400' : 'no-store'}); res.end(original.bytes);
         } else json(intake.photo(id)); return true;
       }
       if (resource === 'decisions' && id && !action && method === 'POST') { json(intake.resolveDecision(id, await intakeBody(req))); return true; }

@@ -7,6 +7,7 @@ import {testDirectory, png, deferred} from './helpers.mjs';
 import {createIntakeServer} from '../app/intake-http.mjs';
 import {createNotebook} from '../app/http-app.mjs';
 import {questionPage, answerPage} from './intake-extraction-fixtures.mjs';
+import sharp from 'sharp';
 
 const q = (question = '计算 1+1', extra = {}) => ({number: '1', subject: '数学', question, studentAnswer: '', knowledgePoint: '加法', observedError: '', possibleCause: '', needsConfirmation: false, completeness: 'complete', answerStatus: 'unanswered', ...extra});
 async function setup(t, responses = {}, factory = createIntakeServer) {
@@ -39,8 +40,26 @@ async function setup(t, responses = {}, factory = createIntakeServer) {
     }
     throw new Error('batch did not settle');
   };
-  return {request, upload, settle, responses, databasePath: path, calls: () => calls, reopen: async () => { await app.close(); db.close(); await open(); }};
+  return {request, upload, settle, responses, databasePath: path, url: route => 'http://127.0.0.1:' + app.server.address().port + route, calls: () => calls, reopen: async () => { await app.close(); db.close(); await open(); }};
 }
+
+test('photo previews bound transfer dimensions while original evidence remains unchanged', async t => {
+  const app = await setup(t);
+  const bytes = await sharp({create: {width: 1800, height: 2400, channels: 3, background: 'white'}}).jpeg().toBuffer();
+  const batch = await app.settle((await app.request('/api/intake/batches', 'POST', {requestId: crypto.randomUUID(), files: [{name: 'page.jpg', base64: bytes.toString('base64')}]})).data.id);
+  const route = batch.photos[0].imageUrl;
+  const response = await fetch(app.url(route + '?preview=1'));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'image/webp');
+  assert.match(response.headers.get('cache-control'), /private/);
+  const preview = Buffer.from(await response.arrayBuffer()), metadata = await sharp(preview).metadata();
+  assert.ok(metadata.width <= 640 && metadata.height <= 640);
+  assert.ok(preview.length < bytes.length);
+  const original = await fetch(app.url(route));
+  assert.deepEqual(Buffer.from(await original.arrayBuffer()), bytes);
+  assert.equal(app.calls(), 1);
+  assert.equal((await fetch(app.url('/api/intake/photos/missing/image?preview=1'))).status, 404);
+});
 
 test('standalone intake saves every visible question and original evidence without requiring review', async t => {
   const app = await setup(t, {whole: {questions: [q(), q('计算 2+2', {number: '2', studentAnswer: '5', answerStatus: 'answered', teacherReview: {mark: 'incorrect', evidence: '第二题红叉'}}), q('残缺题', {number: '3', completeness: 'partial'})], unclear: []}});
