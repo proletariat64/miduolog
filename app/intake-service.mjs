@@ -5,6 +5,7 @@ import {IntakeStore, digest, now, parse} from './intake-store.mjs';
 import {intakeRecognitionSchema, validateExtraction, questionContent, string, hasVisibleAnswer, sameVisibleDocument, questionNumber} from './intake-records.mjs';
 import {imageType} from './paper-import.mjs';
 import {writeImage} from './local-images.mjs';
+import sharp from 'sharp';
 import * as matching from './intake-matching.mjs';
 
 const encode = JSON.stringify;
@@ -50,7 +51,12 @@ export class IntakeService {
     const similar = this.db.prepare("SELECT data FROM intake_decisions WHERE type='photo_similarity' AND state='pending'").all().map(r => parse(r.data)).find(d => d.photoId === id);
     return {id: p.id, name: p.name, state: p.state, error: p.error, imageUrl: p.imageUrl, extraction: p.extraction, similarCandidates: similar?.candidates || []};
   }
-  async original(id) { const p = this.store.photo(id); if (!p) return null; const bytes = await readFile(resolve(this.imageDir, p.file)); return {bytes, contentType: imageType(bytes) === 'jpg' ? 'image/jpeg' : 'image/' + imageType(bytes)}; }
+  async original(id, {preview = false} = {}) {
+    const p = this.store.photo(id); if (!p) return null;
+    const bytes = await readFile(resolve(this.imageDir, p.file));
+    if (preview) return {bytes: await sharp(bytes).rotate().resize({width: 640, height: 640, fit: 'inside', withoutEnlargement: true}).webp({quality: 65}).toBuffer(), contentType: 'image/webp'};
+    return {bytes, contentType: imageType(bytes) === 'jpg' ? 'image/jpeg' : 'image/' + imageType(bytes)};
+  }
   decision(id) {
     const r = this.db.prepare('SELECT * FROM intake_decisions WHERE id=?').get(id);
     if (!r) return null;
